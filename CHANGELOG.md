@@ -1,0 +1,69 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-05-29
+
+Initial release. Append-only bronze writer: a Kafka Connect sink that commits
+Debezium/Kafka records into Databricks Unity Catalog **managed, catalog-managed**
+Delta tables through the Delta Kernel Java API. No Spark, no second compute plane —
+the write runs in the same Connect worker as the source connectors.
+
+Depends on the Databricks **External Access to UC Managed Delta Table** Beta
+(workspace Previews toggle), DBR 16.4+, and the `@Evolving` Kernel write API
+(Kernel pinned to 4.2.0). See [docs/SPEC.md](docs/SPEC.md) for the design and risks.
+
+### Added
+
+- **Managed catalog-managed UC writes via Delta Kernel.** Each per-partition flush
+  is one Delta transaction against a `delta.feature.catalogManaged=supported` table.
+  Commit coordination moves off the filesystem to Unity Catalog: a
+  `UnityCatalogCommitter` (Kernel `CatalogCommitter`) stages the commit file under
+  `_delta_log/_staged_commits/`, ratifies it through UC (first-writer-wins), then
+  backfills/publishes the ratified file into the numbered `_delta_log` and
+  checkpoints to keep reads O(1) in table history. Storage credentials are
+  short-lived, vended per table by UC (READ_WRITE), installed as a Hadoop ABFS
+  fixed SAS. No long-lived storage secret, no stage bucket.
+- **Debezium flat + full nested envelope.** Flat primitive/logical-type rows
+  (post-`ExtractNewRecordState`) map to flat Delta columns; full nested
+  `before`/`after`/`source` structs map to nested Delta struct columns. Schema
+  mapping and record conversion recurse into STRUCTs.
+- **Three flush dials, whichever trips first.** `flush.size` (rows), `flush.bytes`
+  (approx buffered bytes, for target file size), `flush.interval.ms` (max latency).
+  `flush.interval.ms` defaults to 5s — the max-latency SLA, enforced by a scheduler
+  so queued rows commit within the interval under light traffic.
+- **Effectively-once delivery.** Each per-partition commit is stamped
+  `SetTransaction(appId, kafkaOffset)`; replays of an already-applied
+  `(appId, version)` are rejected by Kernel and treated as no-ops. `preCommit`
+  returns a partition's offset only after that partition's Delta commit succeeds.
+- **Streaming low-latency write path.** The snapshot is loaded once per table and
+  the post-commit snapshot is reused as the base for the next append (no per-commit
+  log re-read). Maintenance (publish/backfill + checkpoint) runs on a single-thread
+  executor off the commit path, so per-commit latency stays flat as the table grows.
+- **commitInfo enrichment.** The committer populates the three controllable
+  `commitInfo` fields so the Delta history reads like a Spark-written table:
+  `operationMetrics` (`numOutputRows` / `numFiles` / `numOutputBytes`),
+  `operationParameters` (`mode=Append`), and `isBlindAppend=true`.
+- **Benchmarks.** Live runs against a managed catalog-managed UC table writing a
+  Debezium envelope payload: 235k rows/s sustained over 100M rows (424 s, 50
+  commits), 271k rows/s peak at 2.5M-row batches, ~2 s p50 commit at small batches,
+  latency flat across the full run. Data, charts, and raw CSVs under
+  [docs/benchmarks/](docs/benchmarks/README.md).
+
+### Known limitations
+
+- Append-only. No UPDATE/DELETE/MERGE (Kernel write API is blind-append); do DML
+  downstream in Databricks (Lakeflow AUTO CDC or `MERGE` via the SQL warehouse).
+- Unpartitioned writes. `partition.columns` applies only at table creation.
+- Nested STRUCT supported; top-level ARRAY/MAP columns are rejected at schema-map time.
+- Azure/ADLS Gen2 (`abfss://`) only for the live path.
+- Credential refresh for long-running tasks is reactive (a flush failure re-vends);
+  a proactive refresh-before-expiry loop is future work.
+
+[Unreleased]: https://github.com/dakotaoss/kafka-connect-delta/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/dakotaoss/kafka-connect-delta/releases/tag/v0.1.0

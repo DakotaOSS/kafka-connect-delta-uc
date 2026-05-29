@@ -1,0 +1,30 @@
+{
+  "name": "sqlserver-cdc-source",
+  "config": {
+    "connector.class": "io.debezium.connector.sqlserver.SqlServerConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "sqlserver.internal",
+    "database.port": "1433",
+    "database.user": "${file:/opt/secrets/sqlserver.properties:user}",
+    "database.password": "${file:/opt/secrets/sqlserver.properties:password}",
+    "database.names": "sales",
+    "database.encrypt": "false",
+
+    "topic.prefix": "dakota",
+    "table.include.list": "dbo.customers,dbo.orders",
+
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+    "schema.history.internal.kafka.topic": "schema-history.sales",
+
+    "snapshot.mode": "initial",
+    "decimal.handling.mode": "double",
+    "time.precision.mode": "connect",
+    "tombstones.on.delete": "true",
+
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "true",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "true"
+  }
+}
