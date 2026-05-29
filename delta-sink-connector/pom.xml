@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.dakotaoss</groupId>
+  <artifactId>kafka-connect-delta-uc</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+  <name>Delta UC Sink Connector</name>
+  <description>Kafka Connect sink that writes to Unity Catalog managed Delta tables using the Delta Kernel Java API (no Spark).</description>
+
+  <properties>
+    <maven.compiler.release>11</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <delta.kernel.version>4.2.0</delta.kernel.version>
+    <kafka.version>3.8.1</kafka.version>
+    <hadoop.version>3.4.2</hadoop.version>
+    <jackson.version>2.17.2</jackson.version>
+  </properties>
+
+  <!-- Import the Jackson BOM so every jackson-* (incl. Hadoop's transitives) resolves in lockstep. -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- Delta Kernel: protocol + write/read APIs (no Spark). -->
+    <dependency>
+      <groupId>io.delta</groupId>
+      <artifactId>delta-kernel-api</artifactId>
+      <version>${delta.kernel.version}</version>
+    </dependency>
+    <!-- Default Engine implementation (Hadoop-backed Parquet/JSON/FS I/O). -->
+    <dependency>
+      <groupId>io.delta</groupId>
+      <artifactId>delta-kernel-defaults</artifactId>
+      <version>${delta.kernel.version}</version>
+    </dependency>
+    <!-- delta-storage ships the Unity Catalog commit-coordinator REST client
+         (io.delta.storage.commit.uccommitcoordinator.*) used to ratify catalog-managed commits. -->
+    <dependency>
+      <groupId>io.delta</groupId>
+      <artifactId>delta-storage</artifactId>
+      <version>${delta.kernel.version}</version>
+    </dependency>
+    <!-- The Unity Catalog OSS client SDK the UC commit client delegates to (DeltaCommitsApi etc.). -->
+    <dependency>
+      <groupId>io.unitycatalog</groupId>
+      <artifactId>unitycatalog-client</artifactId>
+      <version>0.4.1</version>
+    </dependency>
+
+    <!-- Kafka Connect API. Provided by the Connect runtime at deploy time. -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>connect-api</artifactId>
+      <version>${kafka.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Hadoop: Configuration (compile) + filesystem/ABFS drivers (runtime). -->
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-client-api</artifactId>
+      <version>${hadoop.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-client-runtime</artifactId>
+      <version>${hadoop.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+    <!-- Azure ADLS Gen2 driver (abfss://). Needed in production; harmless in tests. -->
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-azure</artifactId>
+      <version>${hadoop.version}</version>
+      <scope>runtime</scope>
+      <!-- We only use ABFS (abfss://); drop the legacy WASB stack so its
+           azure-storage/keyvault transitives aren't shipped or scanned. -->
+      <exclusions>
+        <exclusion>
+          <groupId>com.microsoft.azure</groupId>
+          <artifactId>azure-storage</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>com.microsoft.azure</groupId>
+          <artifactId>azure-keyvault-core</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <!-- hadoop-azure needs UNshaded commons-lang3; hadoop-client-runtime only ships a
+         relocated copy (org.apache.hadoop.shaded.*), so provide the real one explicitly. -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-lang3</artifactId>
+      <version>3.18.0</version>
+      <scope>runtime</scope>
+    </dependency>
+    <!-- Same reason as commons-lang3: hadoop-azure's Parquet write path needs unshaded commons-io. -->
+    <dependency>
+      <groupId>commons-io</groupId>
+      <artifactId>commons-io</artifactId>
+      <version>2.18.0</version>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- JSON for the Unity Catalog REST client. Versions come from the imported jackson-bom above. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <!-- core+annotations declared so the BOM's version wins over Hadoop's older transitive ones. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-annotations</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>1.7.36</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Tests -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.2</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>0.8.12</version>
+        <executions>
+          <execution>
+            <id>prepare-agent</id>
+            <goals><goal>prepare-agent</goal></goals>
+          </execution>
+          <execution>
+            <id>report</id>
+            <phase>test</phase>
+            <goals><goal>report</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

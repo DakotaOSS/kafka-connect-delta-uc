@@ -1,0 +1,24 @@
+# Maven build output
+target/
+*.class
+
+# Personal Claude Code config (shared config lives in .claude/settings.json)
+.claude/settings.local.json
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Python (benchmark charting)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / scratch
+*.log
