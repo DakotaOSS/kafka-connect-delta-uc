@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo reminder: run offline tests in Docker before committing - see CLAUDE.md or /test"
+          }
+        ]
+      }
+    ]
+  }
+}
