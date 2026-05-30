@@ -14,7 +14,7 @@
     "databricks.workspace.url": "https://adb-1234567890.1.azuredatabricks.net",
     "databricks.token": "${file:/opt/secrets/databricks.properties:token}",
 
-    "table.name.format": "main.ingestion.${topic}",
+    "table.name.format": "bronze.${topic[1]}.${topic[3]}",
     "flush.size": "5000",
     "flush.bytes": "134217728",
     "flush.interval.ms": "5000",

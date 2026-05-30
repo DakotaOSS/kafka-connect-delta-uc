@@ -143,7 +143,8 @@ Config surface is `DeltaSinkConfig`. Defaults shown.
 |---|---|---|---|
 | `databricks.workspace.url` | string | — | UC REST base URL |
 | `databricks.token` | password | — | bearer token (PAT or AAD); principal needs `EXTERNAL USE SCHEMA` |
-| `table.name.format` | string | `main.ingestion.${topic}` | 3-part UC name; `${topic}` substituted with the sanitised topic |
+| `table.name.format` | string | `main.ingestion.${topic}` | Default template. `${topic}` = whole sanitised topic; `${topic[N]}` = its Nth dot-segment (0-indexed). Must resolve to `catalog.schema.table` |
+| `topic.to.table` | list | (empty) | Per-topic overrides that win over the template: `<topic>:<catalog>.<schema>.<table>,...` |
 | `partition.columns` | list | (empty) | partition cols, used only when this connector creates a table |
 | `flush.size` | int | 500 | rows buffered per partition before a commit; 0 disables this dial |
 | `flush.bytes` | long | 0 | approx buffered bytes before a commit, for target file size (e.g. 134217728 = 128 MiB); 0 disables |
@@ -157,10 +158,18 @@ comfortable even from an out-of-region harness (benchmarks show ~2 s p50 commit 
 Raise `flush.bytes` toward 128–256 MiB to amortize fixed per-commit cost and cut file count; that
 raises latency and per-commit memory.
 
-`table.name.format` does topic→`catalog.schema.table` mapping. `${topic}` is the only substitution; the
-topic is sanitised (`[^A-Za-z0-9_]` → `_`) before substitution. One topic resolves to exactly one
-table, which is the intended concurrency model: one task owns one table so writers do not collide. UC
-conflict arbitration is the safety net, not the primary strategy.
+**Routing.** One connector handles many tables — each subscribed topic is resolved independently.
+`table.name.format` is the default template: `${topic}` substitutes the whole sanitised topic
+(`[^A-Za-z0-9_]` → `_`), and `${topic[N]}` substitutes its Nth dot-segment (0-indexed), so a structured
+topic like Debezium's `server.schema.table` maps to any `catalog.schema.table` (e.g.
+`bronze.${topic[1]}.${topic[3]}`) without per-topic config. `topic.to.table` pins specific topics to
+arbitrary destinations and wins over the template; unlisted topics fall back to it. The result must be
+a 3-part name. Concurrency: per-partition `SetTransaction` keeps writes effectively-once even when a
+topic's partitions spread across tasks; UC conflict arbitration is the safety net for same-table
+concurrency, not the primary strategy. Because the template sanitises each value
+(`[^A-Za-z0-9_]` → `_`), distinct topics can flatten to the same name; under an untrusted/pattern
+subscription prefer explicit `topic.to.table` mappings or a topic allowlist (tracked as a hardening
+item — the explicit map is matched on the exact topic and never flattened).
 
 ## Delivery semantics — effectively-once
 

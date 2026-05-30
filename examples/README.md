@@ -11,7 +11,7 @@ Kafka topics  dakota.sales.dbo.customers, dakota.sales.dbo.orders   (Debezium en
    │  delta-uc-sink.json  (io.dakotaoss.delta.DeltaSinkConnector)
    │    ExtractNewRecordState flattens envelope → after-image + op/lsn/ts_ms
    ▼
-bronze Delta (UC managed, catalog-managed)  main.ingestion.<topic>   ── append-only, full change log
+bronze Delta (UC managed, catalog-managed)  bronze.<db>.<table>      ── append-only, full change log
    │  MERGE / AUTO CDC in Databricks, ordered by lsn
    ▼
 curated current-state tables  main.curated.*
@@ -52,16 +52,19 @@ the catalog-managed sink appends to a pre-created table; it does not create cata
 table schema must match the flattened value, columns nullable (Kernel enforces nullability):
 
 ```sql
-CREATE TABLE main.ingestion.dakota_sales_dbo_customers (
+CREATE TABLE bronze.sales.customers (
   id INT, name STRING, email STRING,
   __op STRING, __source_lsn STRING, __source_ts_ms LONG, __deleted STRING
 ) TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 ```
 
-`${topic}` in `table.name.format` is sanitised (`[^A-Za-z0-9_]` → `_`), so topic
-`dakota.sales.dbo.customers` resolves to table `main.ingestion.dakota_sales_dbo_customers`. one topic →
-one table; route one task per table so writers don't collide. requires the **External Access to UC
-Managed Delta Table** Beta and DBR 16.4+ (see [../README.md](../README.md#status)).
+the example sets `table.name.format = "bronze.${topic[1]}.${topic[3]}"`, so topic
+`dakota.sales.dbo.customers` (segments `dakota`/`sales`/`dbo`/`customers`) routes to
+`bronze.sales.customers`, and `dakota.sales.dbo.orders` to `bronze.sales.orders` — one connector,
+many tables, no per-topic config. to pin a topic to an arbitrary destination instead, add a
+`topic.to.table` entry (`<topic>:<catalog>.<schema>.<table>`) that wins over the template. requires
+the **External Access to UC Managed Delta Table** Beta and DBR 16.4+ (see
+[../README.md](../README.md#status)).
 
 ## prerequisites
 
@@ -104,7 +107,7 @@ MERGE INTO main.curated.customers t
 USING (
   SELECT * FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY __source_lsn DESC) AS rn
-    FROM main.ingestion.dakota_sales_dbo_customers
+    FROM bronze.sales.customers
   ) WHERE rn = 1
 ) s
 ON t.id = s.id

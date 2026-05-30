@@ -45,4 +45,39 @@ class DeltaSinkConfigTest {
   void missingRequiredFails() {
     assertThrows(ConfigException.class, () -> new DeltaSinkConfig(new HashMap<>()));
   }
+
+  @Test
+  void topicToTableParses() {
+    Map<String, String> p = required();
+    p.put(DeltaSinkConfig.TOPIC_TO_TABLE, "orders:main.sales.orders,users:analytics.cdc.users");
+    Map<String, String> m = new DeltaSinkConfig(p).topicToTable();
+    assertEquals("main.sales.orders", m.get("orders"));
+    assertEquals("analytics.cdc.users", m.get("users"));
+  }
+
+  @Test
+  void topicToTableEmptyByDefault() {
+    assertTrue(new DeltaSinkConfig(required()).topicToTable().isEmpty());
+  }
+
+  @Test
+  void topicToTableRejectsMalformedEntry() {
+    Map<String, String> p = required();
+    p.put(DeltaSinkConfig.TOPIC_TO_TABLE, "orders:main.sales"); // not a 3-part name
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+  }
+
+  @Test
+  void topicToTableRejectsWhitespaceInsidePart() {
+    Map<String, String> p = required();
+    p.put(DeltaSinkConfig.TOPIC_TO_TABLE, "orders:main. sales .orders"); // space inside a part
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+  }
+
+  @Test
+  void topicToTableRejectsDuplicateKey() {
+    Map<String, String> p = required();
+    p.put(DeltaSinkConfig.TOPIC_TO_TABLE, "orders:a.b.c,orders:d.e.f");
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+  }
 }

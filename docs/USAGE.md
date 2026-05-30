@@ -137,15 +137,32 @@ Verified keys (`DeltaSinkConfig`). Defaults shown.
 |---|---|---|
 | `databricks.workspace.url` | — | UC REST base URL, e.g. `https://adb-1234567890.1.azuredatabricks.net` |
 | `databricks.token` | — | bearer token (PAT/OAuth/AAD); externalize via config provider |
-| `table.name.format` | `main.ingestion.${topic}` | 3-part UC name; `${topic}` substituted with the sanitised topic (`[^A-Za-z0-9_]`→`_`) |
+| `table.name.format` | `main.ingestion.${topic}` | Default template. `${topic}` = whole sanitised topic (`[^A-Za-z0-9_]`→`_`); `${topic[N]}` = its Nth dot-segment (0-indexed), so a structured topic maps to any `catalog.schema.table`, e.g. `bronze.${topic[0]}.${topic[2]}`. Must resolve to 3 parts. |
+| `topic.to.table` | (none) | Explicit per-topic overrides that win over the template: `<topic>:<catalog>.<schema>.<table>,...` |
 | `partition.columns` | (none) | partition cols, used only when this connector creates a new table |
 | `flush.size` | `500` | rows buffered per partition before commit; `0` disables the row dial |
 | `flush.bytes` | `0` | approx buffered bytes before commit, for target file size (e.g. `134217728` = 128 MiB); `0` disables |
 | `flush.interval.ms` | `5000` | max ms to buffer a partition before commit; the max-latency SLA |
 
-Route **one task per table** (topic→table) so writers do not collide — set
-`tasks.max` to match and keep `topics` aligned to one table per connector. UC
-conflict arbitration is the safety net, not the primary concurrency strategy.
+**Routing.** One connector handles many tables: subscribe to multiple `topics`
+(or `topics.regex`) and each is routed independently. `table.name.format` is the
+default — use `${topic[N]}` segment tokens to derive catalog/schema/table from a
+structured topic (e.g. Debezium's `server.schema.table`), or `topic.to.table` to
+pin specific topics to arbitrary destinations. Overrides win; unlisted topics fall
+back to the template.
+
+Concurrency: a multi-partition topic's partitions may spread across tasks, so set
+`tasks.max` with that in mind. Per-partition `SetTransaction` keeps delivery
+effectively-once; UC conflict arbitration is the safety net for same-table
+concurrency, not the primary strategy.
+
+Security: `${topic}`/`${topic[N]}` sanitise each value (`[^A-Za-z0-9_]`→`_`), so
+distinct topics can flatten to the same name (`orders-v2` and `orders.v2` both →
+`orders_v2`). Under an open `topics.regex` subscription where topic names are
+untrusted, prefer explicit `topic.to.table` entries (matched on the exact topic) or
+a topic allowlist, so a crafted topic can't collide onto another table. UC still
+gates every write by the principal's grants, so the blast radius is limited to
+tables the connector can already write.
 
 Tuning: the three flush dials trip independently, whichever first. `flush.size` /
 `flush.bytes` flush opportunistically inside `put` when a buffer fills;
@@ -177,6 +194,15 @@ Full config example:
   }
 }
 ```
+
+**Routing many tables.** Subscribe to several topics; each routes independently.
+Derive the destination from a structured topic with segment tokens (no per-topic config):
+
+    "table.name.format": "bronze.${topic[1]}.${topic[3]}"
+
+Or pin specific topics to arbitrary destinations (these win over the template):
+
+    "topic.to.table": "orders:main.sales.orders,users:analytics.identity.users"
 
 POST it:
 

@@ -8,6 +8,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Production {@link TableResolver}: maps a topic to a {@code catalog.schema.table} name, asks Unity
@@ -20,19 +22,33 @@ import java.util.Map;
  */
 public final class UcTableResolver implements TableResolver {
 
+  // ${topic} (whole topic) or ${topic[N]} (Nth dot-segment, 0-indexed).
+  private static final Pattern TOPIC_TOKEN = Pattern.compile("\\$\\{topic(?:\\[(\\d+)\\])?\\}");
+
   private final UnityCatalogClient uc;
-  private final String tableNameFormat; // e.g. "main.ingestion.${topic}"
+  private final String tableNameFormat; // e.g. "main.ingestion.${topic}" or "bronze.${topic[0]}.${topic[2]}"
+  private final Map<String, String> topicToTable; // explicit topic -> catalog.schema.table overrides
   private final List<String> partitionColumns;
 
+  /** Convenience constructor with no explicit per-topic overrides. */
   public UcTableResolver(UnityCatalogClient uc, String tableNameFormat, List<String> partitionColumns) {
+    this(uc, tableNameFormat, Collections.emptyMap(), partitionColumns);
+  }
+
+  public UcTableResolver(
+      UnityCatalogClient uc,
+      String tableNameFormat,
+      Map<String, String> topicToTable,
+      List<String> partitionColumns) {
     this.uc = uc;
     this.tableNameFormat = tableNameFormat;
+    this.topicToTable = topicToTable == null ? Collections.emptyMap() : topicToTable;
     this.partitionColumns = partitionColumns == null ? Collections.emptyList() : partitionColumns;
   }
 
   @Override
   public TableTarget resolve(String topic) {
-    String fullName = tableNameFormat.replace("${topic}", sanitize(topic));
+    String fullName = resolveName(tableNameFormat, topicToTable, topic);
     try {
       UnityCatalogClient.TableInfo table = uc.getTable(fullName);
       if (table.tableId == null || table.storageLocation == null) {
@@ -86,6 +102,55 @@ public final class UcTableResolver implements TableResolver {
     // first table's (out-of-scope) SAS and get 403s. Disable the cache so each table uses its own.
     conf.put("fs.abfss.impl.disable.cache", "true");
     return conf;
+  }
+
+  /**
+   * Resolve a topic to its full {@code catalog.schema.table}: an explicit {@code topic.to.table}
+   * override wins; otherwise render {@code table.name.format}. Validates the result is three parts.
+   */
+  public static String resolveName(String format, Map<String, String> overrides, String topic) {
+    String mapped = overrides.get(topic);
+    String full = mapped != null ? mapped : render(format, topic);
+    String[] parts = full.split("\\.", -1);
+    if (parts.length != 3 || parts[0].isEmpty() || parts[1].isEmpty() || parts[2].isEmpty()) {
+      throw new ConnectException(
+          "Routing for topic '" + topic + "' resolved to '" + full
+              + "', which is not a catalog.schema.table name");
+    }
+    return full;
+  }
+
+  // Substitute ${topic} (whole topic) and ${topic[N]} (Nth dot-segment, 0-indexed); every
+  // substituted value is sanitised to a valid identifier part.
+  private static String render(String format, String topic) {
+    String[] seg = topic.split("\\.", -1);
+    Matcher m = TOPIC_TOKEN.matcher(format);
+    StringBuilder out = new StringBuilder();
+    while (m.find()) {
+      String idx = m.group(1);
+      String rep;
+      if (idx == null) {
+        rep = sanitize(topic);
+      } else {
+        final int i;
+        try {
+          i = Integer.parseInt(idx);
+        } catch (NumberFormatException nfe) {
+          // idx is digits but may overflow int; surface a clear config error, not a raw NFE.
+          throw new ConnectException(
+              "table.name.format segment index ${topic[" + idx + "]} is out of range");
+        }
+        if (i >= seg.length) {
+          throw new ConnectException(
+              "table.name.format references ${topic[" + i + "]} but topic '" + topic
+                  + "' has only " + seg.length + " dot-segment(s)");
+        }
+        rep = sanitize(seg[i]);
+      }
+      m.appendReplacement(out, Matcher.quoteReplacement(rep));
+    }
+    m.appendTail(out);
+    return out.toString();
   }
 
   private static String sanitize(String topic) {

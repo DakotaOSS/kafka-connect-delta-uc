@@ -9,8 +9,12 @@ import org.apache.kafka.common.config.types.Password;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /** Configuration surface for the DeltaTables sink connector. */
 public final class DeltaSinkConfig extends AbstractConfig {
@@ -18,6 +22,7 @@ public final class DeltaSinkConfig extends AbstractConfig {
   public static final String WORKSPACE_URL = "databricks.workspace.url";
   public static final String TOKEN = "databricks.token";
   public static final String TABLE_NAME_FORMAT = "table.name.format";
+  public static final String TOPIC_TO_TABLE = "topic.to.table";
   public static final String PARTITION_COLUMNS = "partition.columns";
   public static final String FLUSH_SIZE = "flush.size";
   public static final String FLUSH_BYTES = "flush.bytes";
@@ -51,6 +56,40 @@ public final class DeltaSinkConfig extends AbstractConfig {
         }
       };
 
+  // Each entry maps one topic to a full UC name: "<topic>:<catalog>.<schema>.<table>". Kafka topic
+  // names contain no ':' and UC identifier parts no '.', so the shapes don't collide. Whitespace is
+  // allowed only around the ':' (trimmed at parse); none inside an identifier part, so the validator
+  // and the runtime parser agree on what is accepted.
+  private static final Pattern MAP_ENTRY =
+      Pattern.compile("[^:\\s]+\\s*:\\s*[^.:\\s]+\\.[^.:\\s]+\\.[^.:\\s]+");
+
+  private static final ConfigDef.Validator TOPIC_TABLE_MAP =
+      new ConfigDef.Validator() {
+        @Override
+        public void ensureValid(String name, Object value) {
+          if (value == null) {
+            return;
+          }
+          Set<String> seen = new HashSet<>();
+          for (Object o : (List<?>) value) {
+            String e = String.valueOf(o).trim();
+            if (!MAP_ENTRY.matcher(e).matches()) {
+              throw new ConfigException(
+                  name, e, "each entry must be '<topic>:<catalog>.<schema>.<table>'");
+            }
+            String topic = e.substring(0, e.indexOf(':')).trim();
+            if (!seen.add(topic)) {
+              throw new ConfigException(name, e, "duplicate topic key '" + topic + "'");
+            }
+          }
+        }
+
+        @Override
+        public String toString() {
+          return "list of <topic>:<catalog>.<schema>.<table>";
+        }
+      };
+
   public static final ConfigDef CONFIG_DEF =
       new ConfigDef()
           .define(
@@ -71,7 +110,19 @@ public final class DeltaSinkConfig extends AbstractConfig {
               ConfigDef.Type.STRING,
               "main.ingestion.${topic}",
               ConfigDef.Importance.HIGH,
-              "Three-part UC name; ${topic} is substituted with the (sanitised) topic name.")
+              "Default UC name template for topics not matched by topic.to.table. ${topic} is the "
+                  + "whole (sanitised) topic; ${topic[N]} is its Nth dot-segment (0-indexed), so a "
+                  + "structured topic can route to any catalog.schema.table, e.g. "
+                  + "\"bronze.${topic[0]}.${topic[2]}\". Must resolve to catalog.schema.table.")
+          .define(
+              TOPIC_TO_TABLE,
+              ConfigDef.Type.LIST,
+              Collections.emptyList(),
+              TOPIC_TABLE_MAP,
+              ConfigDef.Importance.MEDIUM,
+              "Explicit per-topic routing that overrides table.name.format. Comma-separated "
+                  + "'<topic>:<catalog>.<schema>.<table>' entries, e.g. "
+                  + "'orders:main.sales.orders,users:analytics.cdc.users'.")
           .define(
               PARTITION_COLUMNS,
               ConfigDef.Type.LIST,
@@ -122,6 +173,16 @@ public final class DeltaSinkConfig extends AbstractConfig {
 
   public String tableNameFormat() {
     return getString(TABLE_NAME_FORMAT);
+  }
+
+  /** Explicit topic -&gt; "catalog.schema.table" overrides; empty when unset. */
+  public Map<String, String> topicToTable() {
+    Map<String, String> m = new LinkedHashMap<>();
+    for (String e : getList(TOPIC_TO_TABLE)) {
+      int c = e.indexOf(':');
+      m.put(e.substring(0, c).trim(), e.substring(c + 1).trim());
+    }
+    return m;
   }
 
   public List<String> partitionColumns() {

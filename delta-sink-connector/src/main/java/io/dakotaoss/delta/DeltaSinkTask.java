@@ -136,7 +136,9 @@ public final class DeltaSinkTask extends SinkTask {
     this.flushIntervalMs = config.flushIntervalMs();
     UnityCatalogClient uc =
         new UnityCatalogClient(config.workspaceUrl(), config.token().value());
-    this.resolver = new UcTableResolver(uc, config.tableNameFormat(), config.partitionColumns());
+    this.resolver =
+        new UcTableResolver(
+            uc, config.tableNameFormat(), config.topicToTable(), config.partitionColumns());
     this.engineProvider = EngineProvider.hadoop();
     this.writer = new DeltaKernelWriter();
     this.maintenance = Executors.newSingleThreadExecutor();

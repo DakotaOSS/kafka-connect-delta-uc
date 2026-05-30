@@ -14,6 +14,8 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.junit.jupiter.api.Test;
 
@@ -86,5 +88,95 @@ class UcTableResolverTest {
     } finally {
       s.stop(0);
     }
+  }
+
+  // ---- routing (resolveName: table.name.format tokens + topic.to.table overrides) --------------
+
+  @Test
+  void defaultTemplateFlattensWholeTopic() {
+    assertEquals(
+        "main.ingestion.orders_v2",
+        UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), "orders-v2"));
+    assertEquals(
+        "main.ingestion.a_b_c",
+        UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), "a.b.c"));
+  }
+
+  @Test
+  void segmentTokensMapStructuredTopicToArbitraryName() {
+    // bronze.<system>.<table> pulled from a dotted topic
+    assertEquals(
+        "bronze.sales.customers",
+        UcTableResolver.resolveName(
+            "bronze.${topic[0]}.${topic[2]}", Collections.emptyMap(), "sales.dbo.customers"));
+    // fully topic-derived catalog.schema.table
+    assertEquals(
+        "sales.dbo.customers",
+        UcTableResolver.resolveName(
+            "${topic[0]}.${topic[1]}.${topic[2]}", Collections.emptyMap(), "sales.dbo.customers"));
+  }
+
+  @Test
+  void explicitMapOverridesTemplateButFallsBackWhenUnmapped() {
+    Map<String, String> map = new HashMap<>();
+    map.put("orders", "analytics.cdc.orders");
+    assertEquals(
+        "analytics.cdc.orders",
+        UcTableResolver.resolveName("main.ingestion.${topic}", map, "orders"));
+    assertEquals(
+        "main.ingestion.users", UcTableResolver.resolveName("main.ingestion.${topic}", map, "users"));
+  }
+
+  @Test
+  void rejectsResultThatIsNotThreePartName() {
+    assertThrows(
+        ConnectException.class,
+        () -> UcTableResolver.resolveName("only.two", Collections.emptyMap(), "t"));
+  }
+
+  @Test
+  void rejectsOutOfRangeSegmentToken() {
+    assertThrows(
+        ConnectException.class,
+        () -> UcTableResolver.resolveName("a.b.${topic[5]}", Collections.emptyMap(), "x.y"));
+  }
+
+  @Test
+  void rejectsOversizedSegmentIndex() {
+    // index > Integer.MAX_VALUE must surface as a clean ConnectException, not a raw NumberFormatException
+    assertThrows(
+        ConnectException.class,
+        () ->
+            UcTableResolver.resolveName(
+                "a.b.${topic[99999999999]}", Collections.emptyMap(), "x.y.z"));
+  }
+
+  @Test
+  void rejectsEmptyRenderedSegment() {
+    // empty leading topic segment -> empty catalog part
+    assertThrows(
+        ConnectException.class,
+        () -> UcTableResolver.resolveName("${topic[0]}.s.t", Collections.emptyMap(), ".sales.x"));
+    // adjacent dots in the format -> empty schema part
+    assertThrows(
+        ConnectException.class,
+        () -> UcTableResolver.resolveName("main..${topic}", Collections.emptyMap(), "orders"));
+  }
+
+  @Test
+  void routesFromRealConfigObject() {
+    // wire the same two methods production uses (config -> 4-arg resolver), offline
+    Map<String, String> props = new HashMap<>();
+    props.put(DeltaSinkConfig.WORKSPACE_URL, "https://adb-1.azuredatabricks.net");
+    props.put(DeltaSinkConfig.TOKEN, "t");
+    props.put(DeltaSinkConfig.TABLE_NAME_FORMAT, "bronze.${topic[0]}.${topic[2]}");
+    props.put(DeltaSinkConfig.TOPIC_TO_TABLE, "legacy:archive.raw.legacy");
+    DeltaSinkConfig cfg = new DeltaSinkConfig(props);
+    assertEquals(
+        "archive.raw.legacy",
+        UcTableResolver.resolveName(cfg.tableNameFormat(), cfg.topicToTable(), "legacy"));
+    assertEquals(
+        "bronze.sys.customers",
+        UcTableResolver.resolveName(cfg.tableNameFormat(), cfg.topicToTable(), "sys.dbo.customers"));
   }
 }
