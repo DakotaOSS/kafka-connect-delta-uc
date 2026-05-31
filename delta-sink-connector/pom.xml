@@ -47,8 +47,10 @@
         <artifactId>commons-logging</artifactId>
         <version>1.3.0</version>
       </dependency>
-      <!-- Parquet's compression lib; pinned past CVE-2025-67721 (info leak from reused buffers,
-           fixed in 2.0.3). It's shipped (compile scope), so bump it rather than suppress. -->
+      <!-- Parquet's compression lib (via delta-kernel-defaults -> parquet-hadoop 1.16.0); pinned past
+           CVE-2025-67721 (info leak from reused buffers, fixed in 2.0.3). It's shipped (compile
+           scope), so bump rather than suppress. Re-verify on a delta.kernel.version bump: newer
+           Parquet may move to the io.airlift:aircompressor-v3 artifact, which this pin would not cover. -->
       <dependency>
         <groupId>io.airlift</groupId>
         <artifactId>aircompressor</artifactId>
@@ -205,6 +207,8 @@
                     <exclude>org.apache.logging.log4j:log4j-core:(,2.17.0)</exclude>
                     <!-- commons-collections gadget-chain deserialization CVEs -->
                     <exclude>commons-collections:commons-collections:(,3.2.1]</exclude>
+                    <!-- keep the CVE-2025-67721 fix: a transitive must not drag aircompressor back -->
+                    <exclude>io.airlift:aircompressor:(,2.0.3)</exclude>
                   </excludes>
                 </bannedDependencies>
               </rules>

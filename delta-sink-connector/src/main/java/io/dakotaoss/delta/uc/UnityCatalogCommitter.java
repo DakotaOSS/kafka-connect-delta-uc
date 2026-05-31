@@ -135,9 +135,9 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
       commits.sort(java.util.Comparator.comparingLong(ParsedLogData::getVersion));
       return new CatalogState(commits, resp.getLatestTableVersion());
     } catch (Exception e) {
-      // Redact: UC/ABFS error text can carry a vended SAS or bearer token.
-      throw new RuntimeException(
-          "UC getCommits failed for " + tableId + ": " + Redact.message(e), e);
+      // Redact and drop the raw cause: UC/ABFS error text can carry a vended SAS or bearer token, and
+      // this propagates from stateFor() (outside flush's redacting catch) to Connect's task-failure log.
+      throw new RuntimeException("UC getCommits failed for " + tableId + ": " + Redact.message(e));
     }
   }
 

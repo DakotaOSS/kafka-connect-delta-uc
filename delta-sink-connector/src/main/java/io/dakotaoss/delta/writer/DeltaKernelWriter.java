@@ -49,7 +49,8 @@ import java.util.Map;
  * from the {@link Engine}; coordination happens inside {@code commit(...)}. See {@code
  * AbfsEngineProvider} for where UC commit/credentials are wired in.
  */
-public final class DeltaKernelWriter {
+// Non-final: it is a constructor-injected collaborator of DeltaSinkTask, so tests can substitute a fake.
+public class DeltaKernelWriter {
 
   private static final Logger LOG = LoggerFactory.getLogger(DeltaKernelWriter.class);
   private static final String ENGINE_INFO = "dakotaoss-delta-uc/0.1";

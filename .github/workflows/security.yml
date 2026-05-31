@@ -20,20 +20,21 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: maven
-      # SBOM of the shipped artifact (provided/test scopes excluded in the pom). enforcer also runs
-      # here via the validate phase (dependency convergence + banned-deps).
+      # SBOM of the shipped artifact (provided/test scopes excluded in the pom). `package` resolves the
+      # full dependency graph and fires the package-bound cyclonedx execution; enforcer also runs (via
+      # the validate phase: dependency convergence + banned-deps).
       - name: Generate CycloneDX SBOM
-        run: mvn -B validate cyclonedx:makeAggregateBom
+        run: mvn -B -DskipTests package
         working-directory: delta-sink-connector
-      # Fail only on fixable HIGH/CRITICAL so we gate on actionable CVEs, not unfixable transitive
-      # noise. Accepted CVEs are justified in .trivyignore. Run the pinned official image rather than
-      # a floating action tag so the gate is reproducible.
+      # Fail on any HIGH/CRITICAL. We do NOT pass --ignore-unfixed: an unfixed-but-disclosed CVE should
+      # surface (that's the point of the weekly schedule); accepted ones are justified in .trivyignore.
+      # Run the pinned official image rather than a floating action tag so the gate is reproducible.
       - name: Trivy CVE scan
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo aquasec/trivy:0.70.0 \
             sbom delta-sink-connector/target/bom.json \
-            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
-            --ignorefile .trivyignore
+            --severity HIGH,CRITICAL --exit-code 1 \
+            --ignorefile /repo/.trivyignore
 
   secret-scan:
     runs-on: ubuntu-latest

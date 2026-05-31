@@ -122,6 +122,11 @@ public final class DeltaSinkTask extends SinkTask {
     this.maintenance = Executors.newSingleThreadExecutor();
   }
 
+  /** Test seam: supply the DLQ reporter that {@code start()} would otherwise pull from the context. */
+  void injectReporter(ErrantRecordReporter reporter) {
+    this.reporter = reporter;
+  }
+
   @Override
   public String version() {
     return VERSION;
@@ -301,20 +306,22 @@ public final class DeltaSinkTask extends SinkTask {
     } catch (Exception e) {
       // drop cached state so next flush re-resolves: re-vends creds, reloads snapshot
       tableStates.remove(tp.topic());
+      // Redact before the failure leaves our code and drop the raw cause: ABFS IOExceptions embed the
+      // request URL incl. the vended SAS, and whatever we hand off persists -- DLQ record headers, and
+      // Connect's task-failure log (which prints the whole cause chain). Carry only the redacted text.
+      ConnectException safe = new ConnectException("flush failed for " + tp + ": " + Redact.message(e));
       if (reporter != null) {
         // conversion/write failed for this batch as a whole: route its records to the DLQ and skip,
         // rather than crash-looping the task on data we cannot write.
         for (SinkRecord record : good) {
-          reporter.report(record, e);
+          reporter.report(record, safe);
         }
         commitFlushed(tp, lastOffset);
-        LOG.warn("Flush for {} reported {} records to DLQ: {}", tp, good.size(), Redact.message(e));
+        LOG.warn("Flush for {} reported {} records to DLQ: {}", tp, good.size(), safe.getMessage());
         return;
       }
-      // no DLQ configured: redact the cause before it can reach logs, and throw a static message
-      // (the raw cause can embed a vended SAS).
-      LOG.error("flush failed for {}: {}", tp, Redact.message(e));
-      throw new ConnectException("flush failed for " + tp, e);
+      LOG.error("{}", safe.getMessage());
+      throw safe;
     }
 
     commitFlushed(tp, lastOffset);

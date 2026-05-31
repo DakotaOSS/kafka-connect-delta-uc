@@ -1,6 +1,7 @@
 package io.dakotaoss.delta;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,6 +11,7 @@ import io.dakotaoss.delta.uc.TableResolver;
 import io.dakotaoss.delta.verify.DeltaTableReader;
 import io.dakotaoss.delta.writer.DeltaKernelWriter;
 import io.dakotaoss.delta.writer.EngineProvider;
+import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.types.StructType;
 import java.nio.file.Path;
@@ -18,6 +20,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
+import org.apache.kafka.connect.sink.ErrantRecordReporter;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.data.Schema;
@@ -62,6 +67,48 @@ class DeltaSinkTaskTest {
         new LocalTableResolver(tmp),
         EngineProvider.hadoop(),
         new DeltaKernelWriter(),
+        "delta-sink-test");
+  }
+
+  // A writer whose append throws an exception carrying a (fake) vended SAS in its message, like a real
+  // ABFS 403 would. Used to prove the flush failure path redacts before the secret leaves the task.
+  private static final String SAS_LEAK =
+      "Operation failed: abfss://c@acct.dfs.core.windows.net/t?sig=LEAK&se=2026-01-01";
+
+  private static final class SasLeakingWriter extends DeltaKernelWriter {
+    @Override
+    public Result append(
+        Engine engine,
+        String tablePath,
+        String tableName,
+        StructType schema,
+        List<String> partitionColumns,
+        String appId,
+        long version,
+        FilteredColumnarBatch logicalBatch) {
+      throw new RuntimeException(SAS_LEAK);
+    }
+  }
+
+  private static String chainText(Throwable t) {
+    StringBuilder sb = new StringBuilder();
+    for (Throwable c = t; c != null; c = c.getCause()) {
+      sb.append(String.valueOf(c.getMessage())).append(" | ").append(c).append('\n');
+    }
+    return sb.toString();
+  }
+
+  private DeltaSinkTask leakingTask(Path tmp) {
+    Map<String, String> props = new HashMap<>();
+    props.put("name", "delta-sink-test");
+    props.put(DeltaSinkConfig.WORKSPACE_URL, "https://example.invalid");
+    props.put(DeltaSinkConfig.TOKEN, "unused");
+    props.put(DeltaSinkConfig.FLUSH_SIZE, "1000");
+    return new DeltaSinkTask(
+        new DeltaSinkConfig(props),
+        new LocalTableResolver(tmp),
+        EngineProvider.hadoop(),
+        new SasLeakingWriter(),
         "delta-sink-test");
   }
 
@@ -127,6 +174,35 @@ class DeltaSinkTaskTest {
     SinkRecord schemaless = new SinkRecord("raw", 0, null, null, null, "just-a-string", 0L);
     task.put(List.of(schemaless));
     assertThrows(ConnectException.class, () -> task.preCommit(Collections.emptyMap()));
+    task.stop();
+  }
+
+  @Test
+  void flushRedactsSasBeforeThrowing(@TempDir Path tmp) {
+    DeltaSinkTask task = leakingTask(tmp);
+    task.put(List.of(rec("orders", 0, 0L, 1, "a", 1.5)));
+    // no DLQ reporter -> the task throws; the thrown exception (and its cause chain) must be redacted
+    ConnectException ex = assertThrows(ConnectException.class, () -> task.preCommit(Collections.emptyMap()));
+    String text = chainText(ex);
+    assertFalse(text.contains("sig=LEAK"), "SAS must be redacted in the thrown exception: " + text);
+    assertFalse(text.contains("acct.dfs.core.windows.net"), "storage host must be redacted: " + text);
+    task.stop();
+  }
+
+  @Test
+  void flushRedactsSasBeforeDlqReport(@TempDir Path tmp) {
+    AtomicReference<Throwable> captured = new AtomicReference<>();
+    DeltaSinkTask task = leakingTask(tmp);
+    task.injectReporter(
+        (record, error) -> {
+          captured.set(error);
+          return (Future<Void>) null;
+        });
+    task.put(List.of(rec("orders", 0, 0L, 1, "a", 1.5)));
+    task.preCommit(Collections.emptyMap()); // DLQ path: records reported, no throw
+    String text = chainText(captured.get());
+    assertFalse(text.contains("sig=LEAK"), "SAS must be redacted before reaching the DLQ: " + text);
+    assertFalse(text.contains("acct.dfs.core.windows.net"), "storage host must be redacted: " + text);
     task.stop();
   }
 
