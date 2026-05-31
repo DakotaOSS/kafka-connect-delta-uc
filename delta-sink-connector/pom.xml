@@ -45,7 +45,7 @@
       <dependency>
         <groupId>commons-logging</groupId>
         <artifactId>commons-logging</artifactId>
-        <version>1.3.0</version>
+        <version>1.3.6</version>
       </dependency>
       <!-- Parquet's compression lib (via delta-kernel-defaults -> parquet-hadoop 1.16.0); pinned past
            CVE-2025-67721 (info leak from reused buffers, fixed in 2.0.3). It's shipped (compile
