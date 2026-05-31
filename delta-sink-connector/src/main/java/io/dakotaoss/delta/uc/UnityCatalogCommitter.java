@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -66,14 +67,15 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
 
   /**
    * @param workspaceUrl UC REST base, e.g. https://adb-xxxx.azuredatabricks.net
-   * @param token bearer token (PAT or AAD access token) with EXTERNAL USE SCHEMA on the schema
+   * @param token bearer token supplier (PAT or AAD access token) for a principal with EXTERNAL USE
+   *     SCHEMA; read per request so a re-minted token is picked up and no extra durable copy is held
    * @param tableId UC table id (the {@code table_id} from GET .../tables)
    * @param tableStorageLocation the table's {@code abfss://} storage location
    * @param hadoopConf Hadoop config carrying the vended ABFS SAS (used to stat the staged commit file)
    */
   public UnityCatalogCommitter(
       String workspaceUrl,
-      String token,
+      Supplier<String> token,
       String tableId,
       String tableStorageLocation,
       Configuration hadoopConf) {
@@ -83,6 +85,16 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
     this.ucClient =
         new UCTokenBasedRestClient(
             workspaceUrl, new BearerTokenProvider(token), Collections.emptyMap());
+  }
+
+  /** Convenience for tests / fixed tokens; production passes a {@link Supplier} reading the config. */
+  public UnityCatalogCommitter(
+      String workspaceUrl,
+      String token,
+      String tableId,
+      String tableStorageLocation,
+      Configuration hadoopConf) {
+    this(workspaceUrl, () -> token, tableId, tableStorageLocation, hadoopConf);
   }
 
   /** What UC knows about a table's log: the ratified (staged, not-yet-published) commits + latest version. */

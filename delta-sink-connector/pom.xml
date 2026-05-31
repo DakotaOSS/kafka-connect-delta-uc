@@ -104,12 +104,12 @@
       <version>${hadoop.version}</version>
       <scope>runtime</scope>
     </dependency>
-    <!-- Azure ADLS Gen2 driver (abfss://). Needed in production; harmless in tests. -->
+    <!-- Azure ADLS Gen2 driver (abfss://). Compile scope: we implement its SASTokenProvider
+         extension (VendedSasTokenProvider) to vend per-table SAS without a JVM-global FS-cache disable. -->
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-azure</artifactId>
       <version>${hadoop.version}</version>
-      <scope>runtime</scope>
       <!-- We only use ABFS (abfss://); drop the legacy WASB stack so its
            azure-storage/keyvault transitives aren't shipped or scanned. -->
       <exclusions>

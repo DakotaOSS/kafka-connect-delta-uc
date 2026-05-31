@@ -13,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Minimal client for the Unity Catalog REST API used by an external Delta writer:
@@ -33,17 +34,24 @@ public final class UnityCatalogClient {
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
   private final String baseUrl; // e.g. https://adb-123.4.azuredatabricks.net
-  private final String bearerToken;
+  // sourced on each request, not held as a long-lived String, so refresh is picked up and we keep no
+  // extra durable copy of the secret (the materialized String lives only for the request).
+  private final Supplier<String> bearerToken;
   private final HttpClient http;
 
-  public UnityCatalogClient(String baseUrl, String bearerToken) {
+  public UnityCatalogClient(String baseUrl, Supplier<String> bearerToken) {
     this(baseUrl, bearerToken, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build());
   }
 
-  public UnityCatalogClient(String baseUrl, String bearerToken, HttpClient http) {
+  public UnityCatalogClient(String baseUrl, Supplier<String> bearerToken, HttpClient http) {
     this.baseUrl = stripTrailingSlash(baseUrl);
     this.bearerToken = bearerToken;
     this.http = http;
+  }
+
+  /** Convenience for tests / fixed tokens; production passes a {@link Supplier} reading the config. */
+  public UnityCatalogClient(String baseUrl, String bearerToken) {
+    this(baseUrl, () -> bearerToken);
   }
 
   /** Resolve {@code catalog.schema.table} to its UC table id and cloud storage location. */
@@ -84,7 +92,7 @@ public final class UnityCatalogClient {
     return HttpRequest.newBuilder()
         .uri(URI.create(url))
         .timeout(Duration.ofSeconds(30))
-        .header("Authorization", "Bearer " + bearerToken);
+        .header("Authorization", "Bearer " + bearerToken.get());
   }
 
   private JsonNode send(HttpRequest req) throws IOException, InterruptedException {

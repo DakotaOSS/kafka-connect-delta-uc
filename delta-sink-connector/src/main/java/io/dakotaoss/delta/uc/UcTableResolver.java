@@ -74,7 +74,11 @@ public final class UcTableResolver implements TableResolver {
     }
   }
 
-  /** Build ABFS fixed-SAS Hadoop config keyed on the storage-account host. */
+  /**
+   * Register the vended SAS in {@link VendedSasStore} and return the ABFS Hadoop config (keyed on the
+   * storage-account host) that points ABFS at {@link VendedSasTokenProvider}. The SAS itself is kept
+   * in the store (as {@code char[]}), never in the returned config.
+   */
   public static Map<String, String> abfsConfig(
       String storageLocation, UnityCatalogClient.TemporaryCredentials creds) {
     Map<String, String> conf = new HashMap<>();
@@ -83,29 +87,26 @@ public final class UcTableResolver implements TableResolver {
       // Non-Azure cloud, or a different credential shape - leave engine to its default chain.
       return conf;
     }
-    String host = URI.create(storageLocation).getHost(); // <account>.dfs.core.windows.net
+    URI uri = URI.create(storageLocation);
+    String host = uri.getHost(); // <account>.dfs.core.windows.net
     if (host == null) {
       return conf;
     }
     // Lower-case: SAS-scoped account keys are host-suffixed; a differently-cased host from UC would
     // not match the abfss:// host ABFS resolves, silently dropping the SAS and 403ing.
     host = host.toLowerCase(java.util.Locale.ROOT);
-    // Fixed-SAS auth: account auth type SAS, vended token as the fixed token. Deliberately do NOT
-    // set fs.azure.sas.token.provider.type: with a fixed token present and no provider type named,
-    // the ABFS driver constructs services.FixedSASTokenProvider(token) itself. Naming that class as
-    // the provider type fails at runtime - it has no no-arg constructor and Hadoop's ReflectionUtils
-    // requires one.
+    // Hold the SAS in the store, scoped to this table's container + directory, instead of putting it
+    // in the Configuration. VendedSasTokenProvider returns it per request path, so the SAS never
+    // lands in the config and one cached FileSystem per host can serve many tables.
+    VendedSasStore.instance().put(host, uri.getUserInfo(), uri.getPath(), sas.toCharArray());
+    // Provider-based SAS auth: account auth type SAS + our provider (it has the required no-arg ctor).
     conf.put("fs.azure.account.auth.type." + host, "SAS");
-    conf.put("fs.azure.sas.fixed.token." + host, sas);
+    conf.put("fs.azure.sas.token.provider.type." + host, VendedSasTokenProvider.class.getName());
     // The vended SAS is scoped to the table's directory. ABFS otherwise probes HNS support by
     // calling getAccessControl on the *container root*, which is outside the SAS scope and 403s.
     // ADLS Gen2 storage is always HNS-enabled, so declare it and skip the probe. Host-suffixed only:
     // an un-suffixed global key would force HNS on co-located connectors sharing this JVM.
     conf.put("fs.azure.account.hns.enabled." + host, "true");
-    // UC vends a SAS scoped to each table's own directory. Hadoop caches one FileSystem per
-    // storage-account host, so without this a second table on the same account would reuse the
-    // first table's (out-of-scope) SAS and get 403s. Disable the cache so each table uses its own.
-    conf.put("fs.abfss.impl.disable.cache", "true");
     return conf;
   }
 

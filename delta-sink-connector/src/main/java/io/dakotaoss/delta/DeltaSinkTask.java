@@ -134,8 +134,10 @@ public final class DeltaSinkTask extends SinkTask {
     this.flushSize = config.flushSize();
     this.flushBytes = config.flushBytes();
     this.flushIntervalMs = config.flushIntervalMs();
+    // Source the token from the config Password on each request rather than extracting a long-lived
+    // String, so we hold no extra durable copy and a re-minted token is picked up.
     UnityCatalogClient uc =
-        new UnityCatalogClient(config.workspaceUrl(), config.token().value());
+        new UnityCatalogClient(config.workspaceUrl(), () -> config.token().value());
     this.resolver =
         new UcTableResolver(
             uc, config.tableNameFormat(), config.topicToTable(), config.partitionColumns());
@@ -371,7 +373,7 @@ public final class DeltaSinkTask extends SinkTask {
       UnityCatalogCommitter committer =
           new UnityCatalogCommitter(
               config.workspaceUrl(),
-              config.token().value(),
+              () -> config.token().value(),
               target.tableId(),
               target.tablePath(),
               conf);

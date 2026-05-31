@@ -9,6 +9,8 @@ import com.sun.net.httpserver.HttpServer;
 import io.dakotaoss.delta.model.TableTarget;
 import io.dakotaoss.delta.uc.UcTableResolver;
 import io.dakotaoss.delta.uc.UnityCatalogClient;
+import io.dakotaoss.delta.uc.VendedSasStore;
+import io.dakotaoss.delta.uc.VendedSasTokenProvider;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -51,8 +53,12 @@ class UcTableResolverTest {
       TableTarget t = resolver.resolve("orders_v2");
       assertEquals("main.ingestion.orders_v2", t.fullName());
       assertEquals("abfss://c@acct.dfs.core.windows.net/t", t.tablePath());
+      // the vended SAS is wired via our provider, not placed in the config
       assertEquals(
-          "sig=zz", t.hadoopConfig().get("fs.azure.sas.fixed.token.acct.dfs.core.windows.net"));
+          VendedSasTokenProvider.class.getName(),
+          t.hadoopConfig().get("fs.azure.sas.token.provider.type.acct.dfs.core.windows.net"));
+      assertEquals(
+          "sig=zz", VendedSasStore.instance().sasFor("acct.dfs.core.windows.net", "c", "t/_delta_log/0"));
     } finally {
       s.stop(0);
     }

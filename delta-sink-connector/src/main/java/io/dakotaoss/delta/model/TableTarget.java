@@ -14,7 +14,9 @@ public final class TableTarget {
   private final String tablePath; // storage location, e.g. abfss://.../... or file:/tmp/t
   private final String tableId; // UC table id; null for filesystem / non-catalog-managed targets
   private final List<String> partitionColumns;
-  private final Map<String, String> hadoopConfig; // overrides merged into the Engine's Configuration
+  // overrides merged into the Engine's Configuration. Carries no secret: the vended SAS lives in
+  // VendedSasStore, referenced only by provider-type, so this map is safe even in a config dump.
+  private final Map<String, String> hadoopConfig;
 
   /** Filesystem or non-catalog-managed target (no UC table id). */
   public TableTarget(
