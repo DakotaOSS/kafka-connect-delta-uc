@@ -1,0 +1,36 @@
+name: security
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # weekly — surface CVEs newly disclosed against unchanged dependencies
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  cve-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      # SBOM of the shipped artifact (provided/test scopes excluded in the pom). enforcer also runs
+      # here via the validate phase (dependency convergence + banned-deps).
+      - name: Generate CycloneDX SBOM
+        run: mvn -B validate cyclonedx:makeAggregateBom
+        working-directory: delta-sink-connector
+      # Fail only on fixable HIGH/CRITICAL so we gate on actionable CVEs, not unfixable transitive
+      # noise. Accepted CVEs are justified in .trivyignore. Run the pinned official image rather than
+      # a floating action tag so the gate is reproducible.
+      - name: Trivy CVE scan
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo aquasec/trivy:0.70.0 \
+            sbom delta-sink-connector/target/bom.json \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            --ignorefile .trivyignore

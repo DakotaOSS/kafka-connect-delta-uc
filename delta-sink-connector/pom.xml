@@ -30,6 +30,30 @@
         <type>pom</type>
         <scope>import</scope>
       </dependency>
+      <!-- Pin the three transitives that otherwise diverge across the Kernel/Parquet/Hadoop/UC graph,
+           to the highest version each path requests, so maven-enforcer's dependencyConvergence holds. -->
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>1.7.36</version>
+      </dependency>
+      <dependency>
+        <groupId>org.xerial.snappy</groupId>
+        <artifactId>snappy-java</artifactId>
+        <version>1.1.10.7</version>
+      </dependency>
+      <dependency>
+        <groupId>commons-logging</groupId>
+        <artifactId>commons-logging</artifactId>
+        <version>1.3.0</version>
+      </dependency>
+      <!-- Parquet's compression lib; pinned past CVE-2025-67721 (info leak from reused buffers,
+           fixed in 2.0.3). It's shipped (compile scope), so bump it rather than suppress. -->
+      <dependency>
+        <groupId>io.airlift</groupId>
+        <artifactId>aircompressor</artifactId>
+        <version>2.0.3</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
@@ -152,6 +176,64 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.13.0</version>
+      </plugin>
+      <!-- Dependency governance: fail the build on version divergence or a banned (legacy/vulnerable)
+           artifact in the large Hadoop transitive graph. Runs at validate, so it gates every build. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <version>3.5.0</version>
+        <executions>
+          <execution>
+            <id>enforce</id>
+            <phase>validate</phase>
+            <goals><goal>enforce</goal></goals>
+            <configuration>
+              <rules>
+                <requireMavenVersion>
+                  <version>[3.6.3,)</version>
+                </requireMavenVersion>
+                <requireJavaVersion>
+                  <version>[11,)</version>
+                </requireJavaVersion>
+                <dependencyConvergence/>
+                <bannedDependencies>
+                  <excludes>
+                    <!-- log4j 1.x (EOL) and the log4shell-vulnerable log4j-core range -->
+                    <exclude>log4j:log4j</exclude>
+                    <exclude>org.slf4j:slf4j-log4j12</exclude>
+                    <exclude>org.apache.logging.log4j:log4j-core:(,2.17.0)</exclude>
+                    <!-- commons-collections gadget-chain deserialization CVEs -->
+                    <exclude>commons-collections:commons-collections:(,3.2.1]</exclude>
+                  </excludes>
+                </bannedDependencies>
+              </rules>
+              <fail>true</fail>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- Emit a CycloneDX SBOM at package time (target/bom.json); CI scans it for CVEs with Trivy. -->
+      <plugin>
+        <groupId>org.cyclonedx</groupId>
+        <artifactId>cyclonedx-maven-plugin</artifactId>
+        <version>2.9.1</version>
+        <executions>
+          <execution>
+            <id>sbom</id>
+            <phase>package</phase>
+            <goals><goal>makeAggregateBom</goal></goals>
+          </execution>
+        </executions>
+        <configuration>
+          <outputFormat>json</outputFormat>
+          <outputName>bom</outputName>
+          <!-- The SBOM describes what the connector ships. provided deps (connect-api, kafka-clients,
+               slf4j) are supplied by the Connect runtime and excluded from the plugin dir, so they're
+               not part of our artifact's risk surface; test deps aren't shipped either. -->
+          <includeProvidedScope>false</includeProvidedScope>
+          <includeTestScope>false</includeTestScope>
+        </configuration>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
