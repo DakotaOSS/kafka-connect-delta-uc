@@ -1,0 +1,8 @@
+# Local secret-scanning guard. Install once with `pip install pre-commit && pre-commit install`.
+# CI runs gitleaks on full history regardless (see .github/workflows/security.yml); this just catches
+# a secret before it leaves the dev's machine.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

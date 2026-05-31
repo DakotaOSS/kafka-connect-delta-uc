@@ -34,3 +34,17 @@ jobs:
             sbom delta-sink-connector/target/bom.json \
             --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
             --ignorefile .trivyignore
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      # full history so a secret committed earlier is still caught
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # Run the image directly: the gitleaks GitHub Action requires a (free) license key for org
+      # accounts, the CLI does not. Exits non-zero on any finding; --redact keeps secrets out of logs.
+      - name: gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            detect --source=/repo --no-banner --redact

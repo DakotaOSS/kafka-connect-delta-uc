@@ -1,0 +1,32 @@
+name: codeql
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "23 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: java-kotlin
+          build-mode: manual
+      # manual build so CodeQL traces the actual compile of the module (the pom is one level down)
+      - run: mvn -B -DskipTests compile
+        working-directory: delta-sink-connector
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:java-kotlin"
