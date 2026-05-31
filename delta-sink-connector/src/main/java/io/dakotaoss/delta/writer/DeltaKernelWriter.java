@@ -49,7 +49,8 @@ import java.util.Map;
  * from the {@link Engine}; coordination happens inside {@code commit(...)}. See {@code
  * AbfsEngineProvider} for where UC commit/credentials are wired in.
  */
-public final class DeltaKernelWriter {
+// Non-final: it is a constructor-injected collaborator of DeltaSinkTask, so tests can substitute a fake.
+public class DeltaKernelWriter {
 
   private static final Logger LOG = LoggerFactory.getLogger(DeltaKernelWriter.class);
   private static final String ENGINE_INFO = "dakotaoss-delta-uc/0.1";
@@ -68,7 +69,8 @@ public final class DeltaKernelWriter {
   /**
    * Append one batch to the table at {@code tablePath}, creating it from {@code schema} if absent.
    * {@code partitionColumns} may be empty. Non-null {@code appId} makes the write idempotent on
-   * {@code (appId, version)}.
+   * {@code (appId, version)}. {@code tableName} is a non-secret label (the UC {@code
+   * catalog.schema.table}) used only in logs/errors so the physical {@code abfss://} path stays out.
    *
    * <p>Single unpartitioned commit only. Partitioned tables need the batch grouped by partition value
    * with {@link Transaction#getWriteContext} called per partition. Not implemented.
@@ -76,6 +78,7 @@ public final class DeltaKernelWriter {
   public Result append(
       Engine engine,
       String tablePath,
+      String tableName,
       StructType schema,
       List<String> partitionColumns,
       String appId,
@@ -123,7 +126,7 @@ public final class DeltaKernelWriter {
 
     // Drain+close the writtenFiles iterator (writeParquet does both); a raw iterator would leak if a
     // later ConcurrentTransactionException short-circuited the commit before it was consumed.
-    List<DataFileStatus> writtenFiles = writeParquet(engine, writeContext, physicalData, tablePath);
+    List<DataFileStatus> writtenFiles = writeParquet(engine, writeContext, physicalData, tableName);
 
     CloseableIterator<Row> appendActions =
         Transaction.generateAppendActions(
@@ -132,7 +135,7 @@ public final class DeltaKernelWriter {
     try {
       TransactionCommitResult result =
           txn.commit(engine, CloseableIterable.inMemoryIterable(appendActions));
-      LOG.info("Committed {} to {} at version {}", appId, tablePath, result.getVersion());
+      LOG.info("Committed {} to {} at version {}", appId, tableName, result.getVersion());
       return new Result(result.getVersion(), true);
     } catch (ConcurrentTransactionException dup) {
       LOG.info("Batch ({}, {}) already committed at commit time; skipping.", appId, version);
@@ -147,10 +150,13 @@ public final class DeltaKernelWriter {
    *
    * <p>Table must already exist (created in Databricks); this is the append/update path. Write flow
    * matches {@link #append}; only snapshot/transaction construction and the committer differ.
+   * {@code tableName} is the non-secret UC name used in logs/errors instead of the {@code abfss://}
+   * path.
    */
   public Result appendCatalogManaged(
       Engine engine,
       String tablePath,
+      String tableName,
       String appId,
       long version,
       FilteredColumnarBatch logicalBatch,
@@ -182,7 +188,7 @@ public final class DeltaKernelWriter {
             engine, txnState, Iters.singleton(logicalBatch), partitionValues);
     DataWriteContext writeContext = Transaction.getWriteContext(engine, txnState, partitionValues);
 
-    List<DataFileStatus> writtenFiles = writeParquet(engine, writeContext, physicalData, tablePath);
+    List<DataFileStatus> writtenFiles = writeParquet(engine, writeContext, physicalData, tableName);
     recordMetrics(committer, logicalBatch, writtenFiles);
 
     CloseableIterator<Row> appendActions =
@@ -191,29 +197,16 @@ public final class DeltaKernelWriter {
 
     TransactionCommitResult result =
         txn.commit(engine, CloseableIterable.inMemoryIterable(appendActions));
-    // Backfill the ratified commit to the published _delta_log. Without it, every later read replays
-    // a growing set of staged catalog commits and per-commit latency climbs without bound.
-    if (result.getPostCommitSnapshot().isPresent()) {
-      try {
-        result.getPostCommitSnapshot().get().publish(engine);
-      } catch (io.delta.kernel.commit.PublishFailedException e) {
-        throw new RuntimeException("Publish (backfill) failed for " + tablePath, e);
-      }
-    }
-    // Post-commit hooks (checkpoint, checksum) keep the published log compact.
-    for (io.delta.kernel.hook.PostCommitHook hook : result.getPostCommitHooks()) {
-      try {
-        hook.threadSafeInvoke(engine);
-      } catch (IOException e) {
-        // Redact: ABFS IOExceptions embed the request URL incl. the SAS query string.
-        LOG.warn("Post-commit hook {} failed: {}", hook.getType(), Redact.message(e));
-      }
-    }
+    // Backfill the ratified commit to the published _delta_log and run post-commit hooks
+    // (checkpoint, checksum). Inline here (vs the streaming path's async maintain) so the all-in-one
+    // call leaves a compact published log. maintain does publish + hooks exactly once: invoking them
+    // here AND calling maintain would double-checkpoint and the second write would collide at a
+    // checkpoint-interval version.
     maintain(engine, result);
     LOG.info(
         "Committed (catalog-managed) {} to {} at version {}",
         appId,
-        tablePath,
+        tableName,
         result.getVersion());
     return new Result(result.getVersion(), true);
   }
@@ -296,6 +289,11 @@ public final class DeltaKernelWriter {
     for (io.delta.kernel.hook.PostCommitHook hook : result.getPostCommitHooks()) {
       try {
         hook.threadSafeInvoke(engine);
+      } catch (io.delta.kernel.exceptions.CheckpointAlreadyExistsException e) {
+        // A checkpoint for this version is already present (e.g. left by an external/Databricks-side
+        // write or an earlier run). The checkpoint is a published-log optimization, never commit
+        // durability -- UC holds the ratified commit -- so an existing one is a no-op, not a failure.
+        LOG.debug("Checkpoint already present for hook {}; skipping (idempotent).", hook.getType());
       } catch (IOException e) {
         // Redact: ABFS IOExceptions embed the request URL incl. the SAS query string.
         LOG.warn("Post-commit hook {} failed: {}", hook.getType(), Redact.message(e));

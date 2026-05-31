@@ -25,6 +25,11 @@ public final class UcTableResolver implements TableResolver {
   // ${topic} (whole topic) or ${topic[N]} (Nth dot-segment, 0-indexed).
   private static final Pattern TOPIC_TOKEN = Pattern.compile("\\$\\{topic(?:\\[(\\d+)\\])?\\}");
 
+  // A topic value substituted into a UC name must already be a valid identifier part. UC identifiers
+  // cap at 255 chars.
+  private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z0-9_]+");
+  private static final int MAX_IDENTIFIER_LEN = 255;
+
   private final UnityCatalogClient uc;
   private final String tableNameFormat; // e.g. "main.ingestion.${topic}" or "bronze.${topic[0]}.${topic[2]}"
   private final Map<String, String> topicToTable; // explicit topic -> catalog.schema.table overrides
@@ -69,7 +74,11 @@ public final class UcTableResolver implements TableResolver {
     }
   }
 
-  /** Build ABFS fixed-SAS Hadoop config keyed on the storage-account host. */
+  /**
+   * Register the vended SAS in {@link VendedSasStore} and return the ABFS Hadoop config (keyed on the
+   * storage-account host) that points ABFS at {@link VendedSasTokenProvider}. The SAS itself is kept
+   * in the store (as {@code char[]}), never in the returned config.
+   */
   public static Map<String, String> abfsConfig(
       String storageLocation, UnityCatalogClient.TemporaryCredentials creds) {
     Map<String, String> conf = new HashMap<>();
@@ -78,29 +87,26 @@ public final class UcTableResolver implements TableResolver {
       // Non-Azure cloud, or a different credential shape - leave engine to its default chain.
       return conf;
     }
-    String host = URI.create(storageLocation).getHost(); // <account>.dfs.core.windows.net
+    URI uri = URI.create(storageLocation);
+    String host = uri.getHost(); // <account>.dfs.core.windows.net
     if (host == null) {
       return conf;
     }
     // Lower-case: SAS-scoped account keys are host-suffixed; a differently-cased host from UC would
     // not match the abfss:// host ABFS resolves, silently dropping the SAS and 403ing.
     host = host.toLowerCase(java.util.Locale.ROOT);
-    // Fixed-SAS auth: account auth type SAS, vended token as the fixed token. Deliberately do NOT
-    // set fs.azure.sas.token.provider.type: with a fixed token present and no provider type named,
-    // the ABFS driver constructs services.FixedSASTokenProvider(token) itself. Naming that class as
-    // the provider type fails at runtime - it has no no-arg constructor and Hadoop's ReflectionUtils
-    // requires one.
+    // Hold the SAS in the store, scoped to this table's container + directory, instead of putting it
+    // in the Configuration. VendedSasTokenProvider returns it per request path, so the SAS never
+    // lands in the config and one cached FileSystem per host can serve many tables.
+    VendedSasStore.instance().put(host, uri.getUserInfo(), uri.getPath(), sas.toCharArray());
+    // Provider-based SAS auth: account auth type SAS + our provider (it has the required no-arg ctor).
     conf.put("fs.azure.account.auth.type." + host, "SAS");
-    conf.put("fs.azure.sas.fixed.token." + host, sas);
+    conf.put("fs.azure.sas.token.provider.type." + host, VendedSasTokenProvider.class.getName());
     // The vended SAS is scoped to the table's directory. ABFS otherwise probes HNS support by
     // calling getAccessControl on the *container root*, which is outside the SAS scope and 403s.
     // ADLS Gen2 storage is always HNS-enabled, so declare it and skip the probe. Host-suffixed only:
     // an un-suffixed global key would force HNS on co-located connectors sharing this JVM.
     conf.put("fs.azure.account.hns.enabled." + host, "true");
-    // UC vends a SAS scoped to each table's own directory. Hadoop caches one FileSystem per
-    // storage-account host, so without this a second table on the same account would reuse the
-    // first table's (out-of-scope) SAS and get 403s. Disable the cache so each table uses its own.
-    conf.put("fs.abfss.impl.disable.cache", "true");
     return conf;
   }
 
@@ -121,7 +127,7 @@ public final class UcTableResolver implements TableResolver {
   }
 
   // Substitute ${topic} (whole topic) and ${topic[N]} (Nth dot-segment, 0-indexed); every
-  // substituted value is sanitised to a valid identifier part.
+  // substituted value must already be a valid identifier part (see identifierPart).
   private static String render(String format, String topic) {
     String[] seg = topic.split("\\.", -1);
     Matcher m = TOPIC_TOKEN.matcher(format);
@@ -130,7 +136,7 @@ public final class UcTableResolver implements TableResolver {
       String idx = m.group(1);
       String rep;
       if (idx == null) {
-        rep = sanitize(topic);
+        rep = identifierPart(topic, topic);
       } else {
         final int i;
         try {
@@ -145,7 +151,7 @@ public final class UcTableResolver implements TableResolver {
               "table.name.format references ${topic[" + i + "]} but topic '" + topic
                   + "' has only " + seg.length + " dot-segment(s)");
         }
-        rep = sanitize(seg[i]);
+        rep = identifierPart(seg[i], topic);
       }
       m.appendReplacement(out, Matcher.quoteReplacement(rep));
     }
@@ -153,8 +159,24 @@ public final class UcTableResolver implements TableResolver {
     return out.toString();
   }
 
-  private static String sanitize(String topic) {
-    // Kafka topics allow chars not valid in table names; normalise conservatively.
-    return topic.replaceAll("[^A-Za-z0-9_]", "_");
+  // Validate a topic-derived value as a UC identifier part. We deliberately reject out-of-set
+  // characters rather than fold them to '_': folding is non-injective (orders.eu, orders/eu,
+  // orders-eu would all collapse to orders_eu), so under an untrusted/regex subscription a crafted
+  // topic could collide onto a victim's table. Dotted topics route via ${topic[N]} segment tokens
+  // (the dot is the delimiter); anything else routes via an explicit topic.to.table mapping, which is
+  // matched on the exact topic and never transformed.
+  private static String identifierPart(String value, String topic) {
+    if (value.length() > MAX_IDENTIFIER_LEN) {
+      throw new ConnectException(
+          "Routing for topic '" + topic + "' produced an identifier part of " + value.length()
+              + " chars, over the " + MAX_IDENTIFIER_LEN + " limit");
+    }
+    if (!IDENTIFIER.matcher(value).matches()) {
+      throw new ConnectException(
+          "Routing for topic '" + topic + "' produced '" + value
+              + "', which is not a valid UC identifier part [A-Za-z0-9_]; use ${topic[N]} segment "
+              + "tokens or an explicit topic.to.table mapping");
+    }
+    return value;
   }
 }

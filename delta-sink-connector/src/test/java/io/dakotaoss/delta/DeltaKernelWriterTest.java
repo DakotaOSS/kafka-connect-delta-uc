@@ -60,6 +60,7 @@ class DeltaKernelWriterTest {
         writer.append(
             engine,
             path,
+            "t.t.orders",
             schema,
             Collections.emptyList(),
             "app:orders-0",
@@ -79,6 +80,7 @@ class DeltaKernelWriterTest {
         writer.append(
             engine,
             path,
+            "t.t.orders",
             schema,
             Collections.emptyList(),
             "app:orders-0",
@@ -100,7 +102,7 @@ class DeltaKernelWriterTest {
         batch(new Integer[] {1, 2, 3}, new String[] {"x", "y", "z"}, new Double[] {1.0, 2.0, 3.0});
 
     DeltaKernelWriter.Result first =
-        writer.append(engine, path, schema, Collections.emptyList(), "app:events-0", 100L, b);
+        writer.append(engine, path, "t.t.events", schema, Collections.emptyList(), "app:events-0", 100L, b);
     assertTrue(first.applied);
     assertEquals(3, DeltaTableReader.countRows(engine, path, schema));
 
@@ -108,7 +110,7 @@ class DeltaKernelWriterTest {
     FilteredColumnarBatch replay =
         batch(new Integer[] {1, 2, 3}, new String[] {"x", "y", "z"}, new Double[] {1.0, 2.0, 3.0});
     DeltaKernelWriter.Result dup =
-        writer.append(engine, path, schema, Collections.emptyList(), "app:events-0", 100L, replay);
+        writer.append(engine, path, "t.t.events", schema, Collections.emptyList(), "app:events-0", 100L, replay);
     assertFalse(dup.applied, "replay of same (appId,version) must be skipped");
     assertEquals(3, DeltaTableReader.countRows(engine, path, schema), "no duplication on replay");
   }

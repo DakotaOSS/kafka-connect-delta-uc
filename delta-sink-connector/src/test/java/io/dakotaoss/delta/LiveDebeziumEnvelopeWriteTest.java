@@ -110,6 +110,7 @@ class LiveDebeziumEnvelopeWriteTest {
             .appendCatalogManaged(
                 engine,
                 target.tablePath(),
+                fullName,
                 "debezium-envelope",
                 now,
                 batch,

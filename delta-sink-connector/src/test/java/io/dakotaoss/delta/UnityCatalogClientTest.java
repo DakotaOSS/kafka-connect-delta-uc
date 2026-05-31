@@ -9,6 +9,8 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.dakotaoss.delta.uc.UcTableResolver;
 import io.dakotaoss.delta.uc.UnityCatalogClient;
+import io.dakotaoss.delta.uc.VendedSasStore;
+import io.dakotaoss.delta.uc.VendedSasTokenProvider;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -22,18 +24,21 @@ class UnityCatalogClientTest {
 
   private HttpServer server;
   private String baseUrl;
+  private volatile String lastAuthHeader;
 
   @BeforeEach
   void startServer() throws Exception {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext(
         "/api/2.1/unity-catalog/tables/",
-        ex ->
-            respond(
-                ex,
-                200,
-                "{\"table_id\":\"abc-123\","
-                    + "\"storage_location\":\"abfss://cont@acct.dfs.core.windows.net/__unitystorage/t\"}"));
+        ex -> {
+          lastAuthHeader = ex.getRequestHeaders().getFirst("Authorization");
+          respond(
+              ex,
+              200,
+              "{\"table_id\":\"abc-123\","
+                  + "\"storage_location\":\"abfss://cont@acct.dfs.core.windows.net/__unitystorage/t\"}");
+        });
     server.createContext(
         "/api/2.1/unity-catalog/temporary-table-credentials",
         ex ->
@@ -78,7 +83,7 @@ class UnityCatalogClientTest {
   }
 
   @Test
-  void buildsFixedSasAbfsConfig() throws Exception {
+  void buildsProviderBasedAbfsConfigAndStoresSasOutOfConfig() throws Exception {
     UnityCatalogClient client = new UnityCatalogClient(baseUrl, "test-token");
     UnityCatalogClient.TableInfo info = client.getTable("main.ingestion.orders");
     UnityCatalogClient.TemporaryCredentials creds =
@@ -86,10 +91,32 @@ class UnityCatalogClientTest {
     Map<String, String> conf = UcTableResolver.abfsConfig(info.storageLocation, creds);
     String host = "acct.dfs.core.windows.net";
     assertEquals("SAS", conf.get("fs.azure.account.auth.type." + host));
-    // provider type must stay unset: ABFS builds FixedSASTokenProvider from the fixed token itself,
-    // and naming the class fails (no no-arg constructor)
-    assertNull(conf.get("fs.azure.sas.token.provider.type." + host));
-    assertEquals("sig=abc&se=2026", conf.get("fs.azure.sas.fixed.token." + host));
+    // our provider is named (it has the required no-arg ctor) and vends per request path
+    assertEquals(
+        VendedSasTokenProvider.class.getName(),
+        conf.get("fs.azure.sas.token.provider.type." + host));
+    assertEquals("true", conf.get("fs.azure.account.hns.enabled." + host));
+    // the SAS must NOT be in the config, and the global FS-cache disable must be gone
+    assertNull(conf.get("fs.azure.sas.fixed.token." + host), "SAS must not be in the Configuration");
+    assertNull(conf.get("fs.abfss.impl.disable.cache"), "must not disable the FS cache globally");
+    // instead the SAS lives in the store, scoped to the table dir, and vends for paths under it
+    assertEquals(
+        "sig=abc&se=2026",
+        VendedSasStore.instance().sasFor(host, "cont", "__unitystorage/t/_delta_log/0.json"));
+  }
+
+  @Test
+  void readsBearerTokenFromSupplierPerRequest() throws Exception {
+    // token is sourced via Supplier and materialized only at the HTTP boundary, so a refresh
+    // (re-mint near expiry) is picked up without rebuilding the client.
+    java.util.concurrent.atomic.AtomicReference<String> tok =
+        new java.util.concurrent.atomic.AtomicReference<>("t1");
+    UnityCatalogClient client = new UnityCatalogClient(baseUrl, (java.util.function.Supplier<String>) tok::get);
+    client.getTable("main.ingestion.orders");
+    assertEquals("Bearer t1", lastAuthHeader);
+    tok.set("t2");
+    client.getTable("main.ingestion.orders");
+    assertEquals("Bearer t2", lastAuthHeader, "token must be re-read from the supplier each request");
   }
 
   @Test

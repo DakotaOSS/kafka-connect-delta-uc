@@ -81,8 +81,8 @@ class LiveMultiTableRoutingTest {
     UnityCatalogCommitter.CatalogState cs = committer.catalogState();
     return new DeltaKernelWriter()
         .appendCatalogManaged(
-            engine, target.tablePath(), appId, System.currentTimeMillis(), batch, committer,
-            cs.commits, cs.maxVersion)
+            engine, target.tablePath(), target.fullName(), appId, System.currentTimeMillis(), batch,
+            committer, cs.commits, cs.maxVersion)
         .version;
   }
 

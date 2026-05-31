@@ -9,6 +9,8 @@ import com.sun.net.httpserver.HttpServer;
 import io.dakotaoss.delta.model.TableTarget;
 import io.dakotaoss.delta.uc.UcTableResolver;
 import io.dakotaoss.delta.uc.UnityCatalogClient;
+import io.dakotaoss.delta.uc.VendedSasStore;
+import io.dakotaoss.delta.uc.VendedSasTokenProvider;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -48,11 +50,15 @@ class UcTableResolverTest {
       UcTableResolver resolver =
           new UcTableResolver(
               new UnityCatalogClient(base, "tok"), "main.ingestion.${topic}", Collections.emptyList());
-      TableTarget t = resolver.resolve("orders-v2");
+      TableTarget t = resolver.resolve("orders_v2");
       assertEquals("main.ingestion.orders_v2", t.fullName());
       assertEquals("abfss://c@acct.dfs.core.windows.net/t", t.tablePath());
+      // the vended SAS is wired via our provider, not placed in the config
       assertEquals(
-          "sig=zz", t.hadoopConfig().get("fs.azure.sas.fixed.token.acct.dfs.core.windows.net"));
+          VendedSasTokenProvider.class.getName(),
+          t.hadoopConfig().get("fs.azure.sas.token.provider.type.acct.dfs.core.windows.net"));
+      assertEquals(
+          "sig=zz", VendedSasStore.instance().sasFor("acct.dfs.core.windows.net", "c", "t/_delta_log/0"));
     } finally {
       s.stop(0);
     }
@@ -93,13 +99,34 @@ class UcTableResolverTest {
   // ---- routing (resolveName: table.name.format tokens + topic.to.table overrides) --------------
 
   @Test
-  void defaultTemplateFlattensWholeTopic() {
+  void defaultTemplatePassesValidTopicThrough() {
+    // a topic that is already a valid identifier substitutes unchanged
     assertEquals(
         "main.ingestion.orders_v2",
-        UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), "orders-v2"));
+        UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), "orders_v2"));
     assertEquals(
-        "main.ingestion.a_b_c",
-        UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), "a.b.c"));
+        "main.ingestion.orders2",
+        UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), "orders2"));
+  }
+
+  @Test
+  void rejectsOutOfSetCharactersInsteadOfCollapsing() {
+    // orders.eu / orders/eu / orders-eu all used to fold to the same orders_eu (non-injective): under
+    // an untrusted regex subscription a crafted topic could collide onto a victim's table. Reject.
+    for (String topic : new String[] {"orders-eu", "orders/eu", "orders.eu", "orders eu", "a$b"}) {
+      assertThrows(
+          ConnectException.class,
+          () -> UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), topic),
+          "out-of-set topic must be rejected, not collapsed: " + topic);
+    }
+  }
+
+  @Test
+  void rejectsOversizedIdentifierPart() {
+    String longTopic = new String(new char[300]).replace('\0', 'a'); // 300 chars, valid charset
+    assertThrows(
+        ConnectException.class,
+        () -> UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), longTopic));
   }
 
   @Test

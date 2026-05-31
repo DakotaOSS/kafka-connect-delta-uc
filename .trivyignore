@@ -1,0 +1,11 @@
+# Trivy vulnerability suppressions. Each entry needs a justification and a re-eval trigger.
+# Format: one CVE id per line; trailing comment is the rationale.
+
+# CVE-2023-39410: Apache Avro 1.9.2 (DoS decoding untrusted data), fixed in 1.11.3. Reaches us only
+# as a *shaded* copy inside hadoop-client-runtime (org.apache.hadoop.shaded.org.apache.avro), so it
+# can't be overridden by a top-level dependency and pom-level scanners don't surface it; listed here
+# so a deep/binary scan stays green with an explicit rationale. The connector never feeds untrusted
+# producer data to an Avro reader (records arrive as deserialized Connect SinkRecords; the write path
+# emits Parquet), so exposure is low. Re-evaluate on every hadoop.version bump; drop once Hadoop ships
+# Avro 1.11.3+. See docs/SPEC.md "Dependency security residuals".
+CVE-2023-39410

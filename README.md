@@ -62,7 +62,7 @@ Drop the jar on the Connect worker's plugin path, then POST a connector config:
 }
 ```
 
-The token principal needs `EXTERNAL USE SCHEMA` on the target schema(s). One connector routes many topics to many tables — see [docs/USAGE.md](docs/USAGE.md) for `${topic[N]}` segment tokens and `topic.to.table` overrides. Per-partition `SetTransaction` keeps delivery effectively-once; UC conflict arbitration is the safety net for same-table concurrency.
+The token principal needs `EXTERNAL USE SCHEMA` on the target schema(s) — and it is the connector's only authorization boundary, so use a dedicated service principal scoped to just those schemas, with short-lived OAuth over a long-lived PAT (see [Least-privilege principal](docs/USAGE.md#least-privilege-principal)). One connector routes many topics to many tables — see [docs/USAGE.md](docs/USAGE.md) for `${topic[N]}` segment tokens and `topic.to.table` overrides. Per-partition `SetTransaction` keeps delivery effectively-once; UC conflict arbitration is the safety net for same-table concurrency.
 
 ## Configuration
 
@@ -70,7 +70,7 @@ The token principal needs `EXTERNAL USE SCHEMA` on the target schema(s). One con
 |---|---|---|
 | `databricks.workspace.url` | — | Workspace base URL for the UC REST API. |
 | `databricks.token` | — | Bearer token (PAT/OAuth/AAD). Principal needs `EXTERNAL USE SCHEMA`. |
-| `table.name.format` | `main.ingestion.${topic}` | Default template. `${topic}` = whole sanitised topic; `${topic[N]}` = its Nth dot-segment (0-indexed), so a structured topic maps to any `catalog.schema.table` (e.g. `bronze.${topic[1]}.${topic[3]}`). |
+| `table.name.format` | `main.ingestion.${topic}` | Default template. `${topic}` = whole topic; `${topic[N]}` = its Nth dot-segment (0-indexed), so a structured topic maps to any `catalog.schema.table` (e.g. `bronze.${topic[1]}.${topic[3]}`). Each substituted value must be a valid identifier (`[A-Za-z0-9_]`, ≤255) or routing is rejected. |
 | `topic.to.table` | (none) | Per-topic overrides that win over the template: `<topic>:<catalog>.<schema>.<table>,...` |
 | `flush.size` | `500` | Rows buffered per partition before commit. `0` disables the row dial. |
 | `flush.bytes` | `0` | Flush at approx buffered bytes, for target file size (e.g. `134217728` = 128 MiB). `0` disables. |

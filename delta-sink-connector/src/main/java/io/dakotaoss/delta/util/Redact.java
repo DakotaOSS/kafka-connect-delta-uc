@@ -11,8 +11,10 @@ public final class Redact {
 
   private Redact() {}
 
-  // whole query string on an abfss:// URL (the SAS lives here)
-  private static final Pattern ABFSS_QUERY = Pattern.compile("(abfss://[^\\s\"'?]+)\\?[^\\s\"']*");
+  // Whole abfss:// URL. Mask authority + path + query, not just the SAS query string: the path
+  // discloses the storage account / container layout, and the SAS lives in the query. One rule
+  // covers both; prefer logging the UC catalog.schema.table name where we control the message.
+  private static final Pattern ABFS_URL = Pattern.compile("(?i)abfss?://[^\\s\"'<]+");
   // loose SAS / bearer fragments anywhere
   private static final Pattern SAS_PARAMS =
       Pattern.compile("(?i)(sig|se|st|skoid|sktid|sks|ske|skt|skv|spr|srt|ss|sp|sr|sv|sdd)=[^&\\s\"']+");
@@ -20,12 +22,12 @@ public final class Redact {
   private static final Pattern SAS_TOKEN_JSON =
       Pattern.compile("(?i)(\"?sas_token\"?\\s*[:=]\\s*\"?)[^\"&\\s,}]+");
 
-  /** Return {@code s} with SAS query strings, SAS params, bearer tokens, and sas_token values masked. */
+  /** Return {@code s} with abfss:// URLs, SAS params, bearer tokens, and sas_token values masked. */
   public static String text(String s) {
     if (s == null) {
       return null;
     }
-    s = ABFSS_QUERY.matcher(s).replaceAll("$1?<redacted>");
+    s = ABFS_URL.matcher(s).replaceAll("abfss://<redacted>");
     s = SAS_PARAMS.matcher(s).replaceAll("$1=<redacted>");
     s = SAS_TOKEN_JSON.matcher(s).replaceAll("$1<redacted>");
     s = BEARER.matcher(s).replaceAll("$1<redacted>");
