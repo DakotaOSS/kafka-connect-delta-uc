@@ -326,6 +326,25 @@ path. Delta ignores uncommitted files; `VACUUM` removes them.
 4. **Delta vs Iceberg managed tables.** Managed-Iceberg external write is further along than managed
    Delta; the format decision sits with the UC team.
 
+## Dependency security residuals
+
+- **Shaded Avro 1.9.2 (CVE-2023-39410).** `hadoop-client-runtime` relocates Avro 1.9.2
+  (`org.apache.hadoop.shaded.org.apache.avro`); CVE-2023-39410 is a denial-of-service when an Avro
+  reader decodes untrusted data, fixed in Avro 1.11.3. Because the copy is shaded inside the Hadoop
+  uber-jar it can't be overridden by a top-level dependency, and Hadoop 3.4.2 still ships 1.9.2 — a
+  Hadoop patch bump alone does not fix it.
+
+  *Exposure here is low.* The connector never feeds untrusted producer data to an Avro reader: Kafka
+  records arrive as already-deserialized Connect `SinkRecord`s (the worker's configured converter runs
+  upstream, outside this code), and the write path emits **Parquet**, not Avro. The shaded Avro is only
+  reachable through Hadoop-internal code paths this connector does not drive on untrusted input. Do not
+  introduce Avro deserialization of producer data in the connector while this residual stands.
+
+  *Tracking:* watch upstream Hadoop moving Avro to 1.11.3+, then bump `hadoop.version`. Pom-level
+  scanners (Dependabot, the CI Trivy SBOM scan) can't see a shaded class, so this is tracked manually;
+  `.trivyignore` carries the CVE with this justification so a deeper/binary scan stays green and
+  documented (re-evaluate on every Hadoop bump).
+
 ## Benchmarks
 
 Live runs against a real managed, catalog-managed UC table (`canadacentral`), Debezium-envelope
