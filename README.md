@@ -62,7 +62,7 @@ Drop the jar on the Connect worker's plugin path, then POST a connector config:
 }
 ```
 
-The token principal needs `EXTERNAL USE SCHEMA` on the target schema(s). One connector routes many topics to many tables — see [docs/USAGE.md](docs/USAGE.md) for `${topic[N]}` segment tokens and `topic.to.table` overrides. Per-partition `SetTransaction` keeps delivery effectively-once; UC conflict arbitration is the safety net for same-table concurrency.
+The token principal needs `EXTERNAL USE SCHEMA` on the target schema(s) — and it is the connector's only authorization boundary, so use a dedicated service principal scoped to just those schemas, with short-lived OAuth over a long-lived PAT (see [Least-privilege principal](docs/USAGE.md#least-privilege-principal)). One connector routes many topics to many tables — see [docs/USAGE.md](docs/USAGE.md) for `${topic[N]}` segment tokens and `topic.to.table` overrides. Per-partition `SetTransaction` keeps delivery effectively-once; UC conflict arbitration is the safety net for same-table concurrency.
 
 ## Configuration
 

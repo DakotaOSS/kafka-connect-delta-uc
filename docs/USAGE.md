@@ -129,6 +129,33 @@ Entra/AAD tokens (and vended SAS) expire in ~1h. For long-running tasks, supply 
 PAT or remint the token — credential refresh is reactive today (a flush failure
 re-vends), proactive refresh is future work.
 
+## Least-privilege principal
+
+`databricks.token` is the connector's only authorization boundary. The same token
+drives both credential vending and the catalog commit coordinator, and
+`table.name.format` / `topic.to.table` are operator convenience, **not** a security
+control — the connector can vend write credentials for, and append to, any table
+the principal is granted. Scope the principal, not the routing config.
+
+- Use a **dedicated service principal** for the connector, separate from human or
+  admin identities, so its blast radius is exactly its grants.
+- Grant `EXTERNAL USE SCHEMA` **only on the specific target schema(s)**, never
+  metastore-wide:
+
+  ```sql
+  GRANT EXTERNAL USE SCHEMA ON SCHEMA main.ingestion TO `<service-principal>`;
+  ```
+
+  The principal can then vend credentials for tables in those schemas and nothing
+  else. Add a schema per destination; don't grant at the catalog/metastore level.
+- Prefer **short-lived OAuth** (Entra/AAD, or Databricks M2M for the service
+  principal) over a long-lived PAT. The vended SAS and an AAD token both last ~1h,
+  so a leaked short-lived token expires on its own; a PAT does not. Mint it through
+  a config provider / secrets manager (see [Externalize the token](#externalize-the-token))
+  and rotate on a schedule. Proactive refresh-before-expiry is future work — the
+  `BearerTokenProvider` is the planned `Supplier`-style hook (see
+  [SPEC.md](SPEC.md#known-gaps--future-work)).
+
 ## Connector config
 
 Verified keys (`DeltaSinkConfig`). Defaults shown.
