@@ -195,7 +195,8 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
           Optional.empty(), // protocol (append: unchanged)
           Optional.empty()); // uniform (Iceberg)
 
-      LOG.info("UC ratified commit v{} for table {} ({})", version, tableId, stagedPath);
+      // Log the UC table id (a UUID), never stagedPath: it's an abfss:// location disclosing layout.
+      LOG.info("UC ratified commit v{} for table {}", version, tableId);
 
       io.delta.kernel.utils.FileStatus kernelStatus =
           io.delta.kernel.utils.FileStatus.of(stagedPath, staged.getLen(), commitTs);

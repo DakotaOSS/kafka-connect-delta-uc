@@ -88,6 +88,7 @@ class LiveDebeziumFlatWriteTest {
             .appendCatalogManaged(
                 engine,
                 target.tablePath(),
+                fullName,
                 "debezium-flat",
                 now,
                 batch,

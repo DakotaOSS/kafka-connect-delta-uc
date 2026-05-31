@@ -289,6 +289,7 @@ public final class DeltaSinkTask extends SinkTask {
         writer.append(
             st.engine,
             st.target.tablePath(),
+            st.target.fullName(),
             kernelSchema,
             st.target.partitionColumns(),
             appId,

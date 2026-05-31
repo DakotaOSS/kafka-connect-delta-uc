@@ -82,7 +82,7 @@ class LiveManagedUcWriteTest {
     DeltaKernelWriter.Result r =
         new DeltaKernelWriter()
             .appendCatalogManaged(
-                engine, target.tablePath(), "live-smoke", now, batch, committer,
+                engine, target.tablePath(), fullName, "live-smoke", now, batch, committer,
                 catalog.commits, catalog.maxVersion);
 
     assertTrue(r.version >= 0, "commit should produce a table version");
