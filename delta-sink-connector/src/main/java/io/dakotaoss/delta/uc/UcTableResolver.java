@@ -16,9 +16,11 @@ import java.util.regex.Pattern;
  * Catalog for the storage location + table id, vends short-lived READ_WRITE credentials, and packages
  * the ABFS configuration the Kernel engine needs to write into the managed table's storage.
  *
- * <p>The vended Azure SAS is installed as a Hadoop ABFS "fixed SAS token" for the storage account
- * host, which is how the default Kernel engine authenticates to {@code abfss://} without a long-lived
- * service-principal secret.
+ * <p>The vended Azure SAS is held as {@code char[]} in {@link VendedSasStore} (never in the Hadoop
+ * {@code Configuration}) and handed to ABFS at the request boundary by a per-host
+ * {@link VendedSasTokenProvider}; the returned config only wires that provider for the storage
+ * account host. This is how the default Kernel engine authenticates to {@code abfss://} without a
+ * long-lived service-principal secret, while one cached FileSystem per host still serves many tables.
  */
 public final class UcTableResolver implements TableResolver {
 

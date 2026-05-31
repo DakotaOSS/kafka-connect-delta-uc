@@ -27,8 +27,10 @@ Depends on the Databricks **External Access to UC Managed Delta Table** Beta
   `_delta_log/_staged_commits/`, ratifies it through UC (first-writer-wins), then
   backfills/publishes the ratified file into the numbered `_delta_log` and
   checkpoints to keep reads O(1) in table history. Storage credentials are
-  short-lived, vended per table by UC (READ_WRITE), installed as a Hadoop ABFS
-  fixed SAS. No long-lived storage secret, no stage bucket.
+  short-lived, vended per table by UC (READ_WRITE), held as `char[]` in a process-wide
+  `VendedSasStore` (never in the Hadoop `Configuration`) and handed to ABFS by a per-host
+  `VendedSasTokenProvider`, so one cached FileSystem per host serves many tables. No
+  long-lived storage secret, no stage bucket.
 - **Debezium flat + full nested envelope.** Flat primitive/logical-type rows
   (post-`ExtractNewRecordState`) map to flat Delta columns; full nested
   `before`/`after`/`source` structs map to nested Delta struct columns. Schema
@@ -45,6 +47,19 @@ Depends on the Databricks **External Access to UC Managed Delta Table** Beta
   the post-commit snapshot is reused as the base for the next append (no per-commit
   log re-read). Maintenance (publish/backfill + checkpoint) runs on a single-thread
   executor off the commit path, so per-commit latency stays flat as the table grows.
+- **Proactive credential refresh.** A cached catalog-managed table is re-resolved
+  (re-vending UC credentials and rebuilding engine/committer/snapshot) once it is
+  ~40 min old, before the ~1h vended-SAS TTL expires; a flush failure also re-vends
+  reactively as a fallback. The bearer token is read from config per request via a
+  `Supplier<String>`, so a re-minted PAT/AAD token is picked up without a restart.
+- **Fail-closed poison-record / DLQ handling.** Records with a null/non-Struct value
+  or a schema differing from the batch reference, and whole-batch write failures, are
+  routed to Connect's errant-record reporter (DLQ) when one is configured; with no
+  reporter the task fails rather than silently advancing the offset past unwritten
+  bronze CDC data. Causes are redacted before they reach DLQ headers or task logs.
+- **Backpressure ceiling.** A hard cap of 1,000,000 rows buffered across all
+  partitions; once exceeded `put` throws a `RetriableException` so Connect pauses and
+  re-delivers, bounding heap growth when a flush stalls (e.g. a UC outage).
 - **commitInfo enrichment.** The committer populates the three controllable
   `commitInfo` fields so the Delta history reads like a Spark-written table:
   `operationMetrics` (`numOutputRows` / `numFiles` / `numOutputBytes`),
@@ -62,8 +77,6 @@ Depends on the Databricks **External Access to UC Managed Delta Table** Beta
 - Unpartitioned writes. `partition.columns` applies only at table creation.
 - Nested STRUCT supported; top-level ARRAY/MAP columns are rejected at schema-map time.
 - Azure/ADLS Gen2 (`abfss://`) only for the live path.
-- Credential refresh for long-running tasks is reactive (a flush failure re-vends);
-  a proactive refresh-before-expiry loop is future work.
 
-[Unreleased]: https://github.com/dakotaoss/kafka-connect-delta/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/dakotaoss/kafka-connect-delta/releases/tag/v0.1.0
+[Unreleased]: https://github.com/DakotaOSS/kafka-connect-delta-uc/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/DakotaOSS/kafka-connect-delta-uc/releases/tag/v0.1.0

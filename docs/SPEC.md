@@ -40,6 +40,59 @@ Non-goals:
 - owning Kafka offset storage. Connect owns offsets; the connector only gates what it returns from
   `preCommit`.
 
+## Requirements & acceptance
+
+Spec-driven: each requirement states the behavior and its acceptance, and links to the test(s) that
+enforce it. A change starts here — update the requirement and its test, then the code, in the same PR.
+Items marked *(live only)* are exercised only by the env-gated `Live*Test`; closing those
+offline-coverage gaps is tracked in the linked issues.
+
+- **R1 — Effectively-once delivery.** Each per-partition commit carries
+  `SetTransaction(appId=<connector>:<topic>-<partition>, version=lastOffset)`, and `preCommit` returns a
+  partition's offset only after its commit succeeds. *Acceptance:* re-applying the same `(appId,
+  version)` adds no rows; offsets advance only post-commit. *Enforced by:*
+  `DeltaKernelWriterTest.idempotentReplayDoesNotDuplicate`,
+  `DeltaSinkTaskTest.preCommitFlushesAndReturnsNextOffset`.
+- **R2 — Append-only bronze.** No UPDATE/DELETE/MERGE; nested STRUCT maps, top-level ARRAY/MAP are
+  rejected at schema-map time. *Acceptance:* an ARRAY/MAP column fails mapping; only appends are emitted.
+  *Enforced by:* `SchemaMapperTest`, `RecordConverterTest`.
+- **R3 — Injective, bounded routing.** `${topic}`/`${topic[N]}` substitutes must be valid UC identifier
+  parts (`[A-Za-z0-9_]`, ≤255) or routing is rejected (never folded); `topic.to.table` overrides win and
+  match the exact topic; the result is 3-part. *Acceptance:* `orders-eu`/`orders.eu` are rejected (not
+  collapsed to `orders_eu`); a >255-char part is rejected; overrides resolve verbatim. *Enforced by:*
+  `UcTableResolverTest` (`rejectsOutOfSetCharactersInsteadOfCollapsing`, `rejectsOversizedIdentifierPart`,
+  `explicitMapOverridesTemplateButFallsBackWhenUnmapped`, `rejectsResultThatIsNotThreePartName`).
+- **R4 — Credential handling.** The vended SAS is held as `char[]` in `VendedSasStore` (never in the
+  Hadoop `Configuration`) and vended per request path by `VendedSasTokenProvider`; the bearer token is a
+  `Supplier<String>` read at the HTTP boundary; cached state re-vends proactively at `REFRESH_MS`.
+  *Acceptance:* `abfsConfig` places no SAS in the config and wires the provider; the store vends the
+  directory-scoped token by path; the client re-reads the token each request. *Enforced by:*
+  `VendedSasStoreTest`, `BearerTokenProviderTest`,
+  `UnityCatalogClientTest.buildsProviderBasedAbfsConfigAndStoresSasOutOfConfig` /
+  `readsBearerTokenFromSupplierPerRequest`.
+- **R5 — Secret redaction.** No vended SAS or bearer token reaches a log, exception message, or DLQ
+  record. *Acceptance:* `Redact` masks whole `abfss://` URLs and SAS/bearer/`sas_token` fragments; a
+  flush failure carrying a SAS is redacted before it reaches the DLQ reporter and the thrown exception.
+  *Enforced by:* `RedactTest`, `DeltaSinkTaskTest.flushRedactsSasBeforeThrowing` /
+  `flushRedactsSasBeforeDlqReport`.
+- **R6 — Catalog-commit protocol.** stage → ratify (first-writer-wins) → publish/backfill → checkpoint;
+  `commitInfo` carries `operationMetrics`/`operationParameters`/`isBlindAppend`; an already-present
+  checkpoint is idempotent. *Acceptance:* a commit ratifies once, publishes the numbered json, enriches
+  commitInfo, and a re-run past a checkpoint-interval version does not fail. *(live only — offline
+  coverage tracked in #25.)*
+- **R7 — Flush cadence.** `flush.size` / `flush.bytes` / `flush.interval.ms`, whichever trips first; all
+  three disabled is a config error. *Acceptance:* the byte dial flushes before the row dial; all-off is
+  rejected at config time. *Enforced by:* `DeltaSinkTaskTest.byteDialFlushesBeforeRowThreshold` /
+  `opportunisticFlushWhenBufferReachesFlushSize`, `DeltaSinkConfigTest`.
+- **R8 — Fail-closed errors + bounded memory.** Poison rows / unwritable batches go to the DLQ when a
+  reporter is configured, else fail the task; total buffered rows are capped at `MAX_BUFFERED_RECORDS`
+  with `RetriableException` backpressure. *Acceptance:* a poison record with no reporter fails the task;
+  past the cap `put` throws `RetriableException`. *Enforced by:*
+  `DeltaSinkTaskTest.schemalessRecordIsRejected`; *backpressure is live/untested — tracked in #31.*
+- **R9 — Config validation.** `databricks.workspace.url` must be `https`; `topic.to.table` entries must
+  be `<topic>:<catalog>.<schema>.<table>`; at least one flush dial must be enabled. *Enforced by:*
+  `DeltaSinkConfigTest`.
+
 ## Architecture
 
 ```mermaid
@@ -47,7 +100,7 @@ graph TD
     K["Warpstream / Kafka topic"]
     P["DeltaSinkTask.put()<br/>buffer per topic-partition"]
     S["SchemaMapper + RecordConverter<br/>Connect STRUCT → Kernel StructType<br/>records → FilteredColumnarBatch (physical encoding)"]
-    R["UcTableResolver → UnityCatalogClient<br/>GET /tables → table_id + abfss:// storage_location<br/>POST /temporary-table-credentials → READ_WRITE SAS<br/>→ ABFS fixed-SAS Hadoop config (per storage-account host)"]
+    R["UcTableResolver → UnityCatalogClient<br/>GET /tables → table_id + abfss:// storage_location<br/>POST /temporary-table-credentials → READ_WRITE SAS<br/>→ SAS into VendedSasStore (char[]); ABFS uses per-host VendedSasTokenProvider<br/>(one cached FileSystem per host serves many tables)"]
     E["EngineProvider<br/>DefaultEngine + Hadoop conf"]
     W["DeltaKernelWriter.appendToSnapshot()<br/>transform → write Parquet → generateAppendActions → txn.commit"]
     C["UnityCatalogCommitter (Kernel CatalogCommitter)<br/>stage commit file under _staged_commits/<br/>→ UC ratify (first-writer-wins)"]
@@ -67,12 +120,19 @@ graph TD
 Per-table state (`DeltaSinkTask.TableState`) is resolved once and cached: the engine, the committer,
 and — for catalog-managed tables — the snapshot, which is advanced in memory across commits rather than
 reloaded from the log each time. A flush failure drops the cached state so the next flush re-resolves
-(re-vends credentials, reloads the snapshot).
+(re-vends credentials, reloads the snapshot). Catalog-managed state is also re-resolved proactively
+before its vended SAS (~1 h TTL) can expire: `stateFor` expires a cached entry after `REFRESH_MS`
+(~40 min) and re-vends, so commits never run with an expiring token.
 
 ## The managed-UC mechanism
 
 Writing to a Databricks **managed** UC table from an external engine is gated on two mechanisms, and
 on a workspace Beta toggle.
+
+The bearer token (PAT or AAD) for both the UC REST calls and the commit RPCs is sourced through a
+`Supplier<String>` read on each request (`UnityCatalogClient`, `BearerTokenProvider`,
+`UnityCatalogCommitter`) and materialized only at the HTTP boundary, so a re-minted token is picked up
+without rebuilding the client and no extra durable copy of the secret is held.
 
 **Catalog commits (`delta.feature.catalogManaged`).** Commit coordination moves from the filesystem to
 Unity Catalog. UC is the source of truth for table state. A writer stages a commit file under
@@ -83,8 +143,11 @@ only writes the filesystem `_delta_log` and refuses these tables — hence `Unit
 **Credential vending.** The connector has no long-lived storage secret. It calls
 `POST /api/2.1/unity-catalog/temporary-table-credentials` with `{table_id, operation: READ_WRITE}` and
 gets back a short-lived token + storage URL scoped to the table. On Azure that is an
-`azure_user_delegation_sas.sas_token`, installed as a Hadoop ABFS fixed SAS (see Configuration / live
-findings). The calling principal needs `EXTERNAL USE SCHEMA` on the schema; the metastore needs
+`azure_user_delegation_sas.sas_token`, held as `char[]` in a process-wide `VendedSasStore` (never placed
+in the Hadoop `Configuration`) and handed to ABFS at the request boundary by a per-host
+`VendedSasTokenProvider`. Because the provider disambiguates by request path, one cached FileSystem per
+storage-account host serves many tables, so no JVM-global FS-cache disable is needed (see Configuration /
+live findings). The calling principal needs `EXTERNAL USE SCHEMA` on the schema; the metastore needs
 external data access enabled.
 
 **Beta + runtime.** External writes to managed *Delta* tables are a Databricks **Beta**, gated behind
@@ -142,7 +205,7 @@ Config surface is `DeltaSinkConfig`. Defaults shown.
 | key | type | default | purpose |
 |---|---|---|---|
 | `databricks.workspace.url` | string | — | UC REST base URL |
-| `databricks.token` | password | — | bearer token (PAT or AAD); principal needs `EXTERNAL USE SCHEMA` |
+| `databricks.token` | password | — | bearer token (PAT or AAD); principal needs `EXTERNAL USE SCHEMA`. Read from the config `Password` per request via a `Supplier<String>` (materialized only at the HTTP boundary), so a re-minted token is picked up without rebuilding the client |
 | `table.name.format` | string | `main.ingestion.${topic}` | Default template. `${topic}` = whole topic; `${topic[N]}` = its Nth dot-segment (0-indexed). Each substituted value must be a valid identifier (`[A-Za-z0-9_]`, ≤255) or routing is rejected. Must resolve to `catalog.schema.table` |
 | `topic.to.table` | list | (empty) | Per-topic overrides that win over the template: `<topic>:<catalog>.<schema>.<table>,...` |
 | `partition.columns` | list | (empty) | partition cols, used only when this connector creates a table |
@@ -157,6 +220,10 @@ The **5 s default for `flush.interval.ms` is the max-latency SLA** — it mirror
 comfortable even from an out-of-region harness (benchmarks show ~2 s p50 commit at small batches).
 Raise `flush.bytes` toward 128–256 MiB to amortize fixed per-commit cost and cut file count; that
 raises latency and per-commit memory.
+
+**Backpressure ceiling.** A hard cap of `MAX_BUFFERED_RECORDS` (~1,000,000 rows across all partitions)
+bounds heap during a stalled flush (e.g. a UC outage). Past it, `put` throws a `RetriableException` so
+Connect pauses and re-delivers the batch once flushes drain the buffers.
 
 **Routing.** One connector handles many tables — each subscribed topic is resolved independently.
 `table.name.format` is the default template: `${topic}` substitutes the whole topic and `${topic[N]}`
@@ -188,6 +255,13 @@ together:
 "Effectively-once," not "exactly-once": a batch can be physically re-attempted, but the table state is
 identical to a single application.
 
+**Poison-record handling (fail-closed).** Each flush splits its buffer into writable rows and poison
+rows (null/non-Struct value, or a schema differing from the batch's reference schema). Poison rows —
+and any batch whose conversion/write fails as a whole — are routed to Connect's errant-record reporter
+(DLQ) when one is configured (`errors.tolerance=all` + a DLQ topic), and the commit then advances the
+offset past them. With no reporter the task fails rather than silently drop the row, so the offset
+never advances over unwritten bronze data. Secrets are redacted before anything reaches the DLQ/logs.
+
 ## Decisions & alternatives considered
 
 **Delta Kernel vs delta-rs vs Spark.** Kernel (Java) is the only OSS path that does catalog-coordinated
@@ -208,10 +282,17 @@ Connect task against object storage — correct under concurrency and DV semanti
 problem. Databricks MERGE is DV-aware and UC-coordinated; run it where it belongs (templates under CDC
 ingestion pattern below).
 
-**Disabling the Hadoop FS cache.** The vended SAS is scoped to each table's own directory. Hadoop
-caches one `FileSystem` per storage-account host, so a second table on the same account would otherwise
-reuse the first table's out-of-scope SAS and 403. `fs.abfss.impl.disable.cache=true` forces each table
-to use its own vended SAS. (A per-table FileSystem would be tidier; see Known gaps.)
+**Vended-SAS isolation without disabling the FS cache.** The vended SAS is scoped to each table's
+own directory, and Hadoop caches one `FileSystem` per storage-account host — so a single cached FS for
+an account would carry one table's token and 403 on a second table sharing the host. Rather than
+disable the JVM-global FS cache, the connector keeps each table's SAS in a process-wide
+`VendedSasStore` (held as `char[]`, never in the Hadoop `Configuration`) keyed by host + the table's
+container/directory, and points ABFS at a custom `VendedSasTokenProvider`
+(`fs.azure.sas.token.provider.type.<host>` + `account.auth.type=SAS`). The provider disambiguates by
+the ABFS request path and hands back the directory-scoped SAS for that table, so one cached
+`FileSystem` per host serves many tables. (Earlier this was done by setting
+`fs.abfss.impl.disable.cache=true`; that JVM-global disable was removed in favor of the per-host
+provider.)
 
 **Publish-every-commit vs periodic.** The all-in-one `appendCatalogManaged` publishes + checkpoints
 inline every commit — correct but pays that cost on the latency path. The streaming path used in the
@@ -277,12 +358,15 @@ The live run against a managed catalog-managed table drove the write path to the
 flushed out bugs the offline suite cannot catch (offline uses `file://`, which never loads the ABFS
 stack). All fixed in the tree.
 
-1. **Wrong SAS provider package** — `…azurebfs.extensions.FixedSASTokenProvider` →
-   `…azurebfs.services.FixedSASTokenProvider`; `extensions` holds only the interface.
-2. **Wrong fixed-SAS wiring** — naming the provider type fails (`FixedSASTokenProvider` has only a
-   `(String)` ctor, Hadoop's `ReflectionUtils` needs a no-arg one). Trigger the fixed-token path by
-   setting **only** `fs.azure.sas.fixed.token.<host>` (+ `auth.type=SAS`); ABFS constructs the provider
-   itself.
+1. **Wrong SAS provider package** — early prototype used `…azurebfs.extensions.FixedSASTokenProvider`
+   (the `extensions` package holds only the interface; the impl lives under `…services`). The connector
+   no longer uses Hadoop's fixed-SAS provider at all (see below).
+2. **Fixed-SAS wiring → per-request provider** — naming Hadoop's own provider type fails because
+   `FixedSASTokenProvider` has only a `(String)` ctor and Hadoop's `ReflectionUtils` needs a no-arg one,
+   and a single fixed token per host cannot serve two tables on the same storage account. The connector
+   now wires a custom `VendedSasTokenProvider` per host (`fs.azure.account.auth.type.<host>=SAS` +
+   `fs.azure.sas.token.provider.type.<host>=…VendedSasTokenProvider`), which has the required no-arg
+   ctor and vends each table's directory-scoped SAS by request path from `VendedSasStore`.
 3. **Missing unshaded `commons-lang3` + `commons-io`** — `hadoop-azure` needs them but
    `hadoop-client-runtime` ships only relocated copies; added both explicitly to `pom.xml`.
 4. **Missing HNS hint** — the vended SAS is table-dir-scoped; ABFS probes HNS by calling
@@ -298,19 +382,14 @@ path. Delta ignores uncommitted files; `VACUUM` removes them.
 
 ## Known gaps & future work
 
-- **Credential refresh.** Vended SAS / AAD tokens are ~1 h. Long-running tasks need a refresh loop. Today
-  a flush failure drops cached state and the next flush re-resolves (re-vends), which covers expiry
-  reactively; a proactive refresh-before-expiry loop is future work. The `BearerTokenProvider` is the
-  hook for token refresh.
-- **Per-table FileSystem.** The FS cache is disabled globally to keep per-table vended SAS isolated. A
-  per-table cache key (or per-table FS instance) would be cleaner than disabling the cache.
 - **Partitioned writes.** The writer commits one unpartitioned batch per flush. Partitioning needs the
   batch grouped by partition value with a per-partition `getWriteContext` — flagged in
   `DeltaKernelWriter.append`.
 - **Metrics limited to three fields.** Only `operationMetrics`/`operationParameters`/`isBlindAppend` are
   controllable in `commitInfo`; the rest is fixed by Kernel's `CommitMetadata`.
 - **Schema evolution.** Additive evolution flows through; UC validates/rejects breaking changes at
-  commit. Route rejected commits to DLQ/retry — not yet built.
+  commit. A rejected commit is routed to the DLQ by the generic fail-closed flush handler (no
+  auto-evolution or retry); automatic schema-evolution / retry is not yet built.
 - **Nested collections.** ARRAY/MAP columns are rejected at schema-map time.
 
 ## Risks
@@ -322,7 +401,9 @@ path. Delta ignores uncommitted files; `VACUUM` removes them.
    Expect API churn; the version is pinned and upgrades gate behind the test suite. The committer also
    crosses Kernel **internal** packages (`io.delta.kernel.internal.actions.*`,
    `…internal.files.*`) which are semi-public and may shift.
-3. **Token lifetime.** ~1 h vended/AAD tokens; the refresh story (above) is reactive today.
+3. **Token lifetime.** ~1 h vended/AAD tokens; refreshed proactively before expiry (re-resolve at
+   `REFRESH_MS` ~40 min) with the reactive drop-on-failure path as a backstop, and a per-request
+   `Supplier<String>` bearer token that picks up a re-minted token.
 4. **Delta vs Iceberg managed tables.** Managed-Iceberg external write is further along than managed
    Delta; the format decision sits with the UC team.
 
