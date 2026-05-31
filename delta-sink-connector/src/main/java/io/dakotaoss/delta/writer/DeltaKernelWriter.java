@@ -47,7 +47,7 @@ import java.util.Map;
  *
  * <p>Catalog-managed (Unity Catalog) tables route the commit through the catalog commit coordinator
  * from the {@link Engine}; coordination happens inside {@code commit(...)}. See {@code
- * AbfsEngineProvider} for where UC commit/credentials are wired in.
+ * EngineProvider} (with UcTableResolver / VendedSasTokenProvider) for where UC commit/credentials are wired in.
  */
 // Non-final: it is a constructor-injected collaborator of DeltaSinkTask, so tests can substitute a fake.
 public class DeltaKernelWriter {

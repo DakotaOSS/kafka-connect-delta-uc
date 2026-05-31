@@ -71,7 +71,8 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
    *     SCHEMA; read per request so a re-minted token is picked up and no extra durable copy is held
    * @param tableId UC table id (the {@code table_id} from GET .../tables)
    * @param tableStorageLocation the table's {@code abfss://} storage location
-   * @param hadoopConf Hadoop config carrying the vended ABFS SAS (used to stat the staged commit file)
+   * @param hadoopConf Hadoop config wiring the per-host {@code VendedSasTokenProvider} (the SAS itself
+   *     lives in {@code VendedSasStore}, not here); used to stat the staged commit file
    */
   public UnityCatalogCommitter(
       String workspaceUrl,

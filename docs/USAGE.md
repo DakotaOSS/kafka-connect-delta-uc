@@ -125,9 +125,11 @@ Other providers work the same way (e.g. a Vault/secrets-manager provider via its
 own `config.providers.*` class). The token principal needs `EXTERNAL USE SCHEMA`
 on the target schema.
 
-Entra/AAD tokens (and vended SAS) expire in ~1h. For long-running tasks, supply a
-PAT or remint the token — credential refresh is reactive today (a flush failure
-re-vends), proactive refresh is future work.
+Entra/AAD tokens (and vended SAS) expire in ~1h. The task proactively re-resolves each cached
+catalog-managed table at ~40 min (`DeltaSinkTask.REFRESH_MS`), re-vending storage credentials before
+the SAS TTL lapses; a flush failure also drops the cached state and re-vends on the next flush. For
+long-running tasks still supply a PAT or a refreshable OAuth/AAD token so the bearer token itself can be
+re-minted.
 
 ## Least-privilege principal
 
@@ -152,9 +154,10 @@ the principal is granted. Scope the principal, not the routing config.
   principal) over a long-lived PAT. The vended SAS and an AAD token both last ~1h,
   so a leaked short-lived token expires on its own; a PAT does not. Mint it through
   a config provider / secrets manager (see [Externalize the token](#externalize-the-token))
-  and rotate on a schedule. Proactive refresh-before-expiry is future work — the
-  `BearerTokenProvider` is the planned `Supplier`-style hook (see
-  [SPEC.md](SPEC.md#known-gaps--future-work)).
+  and rotate on a schedule. The connector reads the bearer token through a `Supplier`
+  on each request (`BearerTokenProvider`), so a re-minted token is picked up without
+  restarting, and it proactively re-vends storage SAS before expiry (see
+  [SPEC.md](SPEC.md)).
 
 ## Connector config
 
@@ -164,7 +167,7 @@ Verified keys (`DeltaSinkConfig`). Defaults shown.
 |---|---|---|
 | `databricks.workspace.url` | — | UC REST base URL, e.g. `https://adb-1234567890.1.azuredatabricks.net` |
 | `databricks.token` | — | bearer token (PAT/OAuth/AAD); externalize via config provider |
-| `table.name.format` | `main.ingestion.${topic}` | Default template. `${topic}` = whole topic; `${topic[N]}` = its Nth dot-segment (0-indexed), so a structured topic maps to any `catalog.schema.table`, e.g. `bronze.${topic[0]}.${topic[2]}`. Each substituted value must be a valid identifier (`[A-Za-z0-9_]`, ≤255) or routing is rejected. Must resolve to 3 parts. |
+| `table.name.format` | `main.ingestion.${topic}` | Default template. `${topic}` = whole topic; `${topic[N]}` = its Nth dot-segment (0-indexed), so a structured topic maps to any `catalog.schema.table`, e.g. `bronze.${topic[1]}.${topic[3]}`. Each substituted value must be a valid identifier (`[A-Za-z0-9_]`, ≤255) or routing is rejected. Must resolve to 3 parts. |
 | `topic.to.table` | (none) | Explicit per-topic overrides that win over the template: `<topic>:<catalog>.<schema>.<table>,...` |
 | `partition.columns` | (none) | partition cols, used only when this connector creates a new table |
 | `flush.size` | `500` | rows buffered per partition before commit; `0` disables the row dial |
@@ -198,7 +201,11 @@ Tuning: the three flush dials trip independently, whichever first. `flush.size` 
 `flush.interval.ms` is enforced by a scheduler so queued rows commit within the
 interval under light traffic. Raise `flush.bytes` toward 128–256 MiB to amortize
 fixed per-commit cost and cut file count — at the cost of higher latency and
-per-commit memory.
+per-commit memory. Total buffered rows across all partitions are capped at ~1,000,000
+(`MAX_BUFFERED_RECORDS`): when a stalled flush (e.g. a UC/storage outage) would push the
+buffer past the cap, `put` raises a `RetriableException` so Connect pauses and re-delivers
+the same batch until flushes drain — bounding heap rather than OOMing. Sustained backpressure
+is a signal the write path cannot keep up.
 
 Full config example:
 
@@ -316,16 +323,25 @@ workspace region (cross-region adds WAN latency per commit).
 - Expired token — Entra/AAD tokens and vended SAS last ~1h. Remint and restart.
 - ABFS 403 mid-write after vending succeeded — the vended SAS is table-dir-scoped;
   an HNS probe on the container root (outside scope) 403s. The connector sets
-  `fs.azure.account.hns.enabled=true` to skip it. If you see this, confirm you are
+  the host-scoped `fs.azure.account.hns.enabled.<account-host>=true` to skip it. If you see this, confirm you are
   on the shipped tree (this was a fixed bug — see [SPEC.md](SPEC.md#live-test-findings-bugs-fixed)).
 
 **Schema mismatch / commit rejected.** UC validates the schema at commit. Additive
 evolution (new nullable columns) flows through; breaking changes (type change,
 dropped/renamed column, nullability tightening) are rejected at commit and the
 flush fails. Reconcile the Connect record schema with the table, or evolve the
-table first. DLQ/retry routing for rejected commits is not yet built — a rejected
-commit fails the task. Top-level `ARRAY`/`MAP` columns are rejected at schema-map
+table first. When an errant-record reporter is configured (`errors.tolerance=all` + a DLQ
+topic), a rejected commit routes its batch to the DLQ and advances past it; with no
+reporter configured the task fails closed rather than silently dropping bronze rows.
+Top-level `ARRAY`/`MAP` columns are rejected at schema-map
 time (only nested `STRUCT` is supported); restructure or drop them in an SMT.
+
+**Poison records & DLQ.** Records with a null/non-Struct value or a schema differing from the batch's
+reference schema are poison. With a Connect errant-record reporter configured (`errors.tolerance=all`
+plus an `errors.deadletterqueue.topic.name`), poison rows and whole batches that fail to convert/commit
+are reported to the DLQ and the offset advances past them; with no reporter the task fails closed rather
+than silently dropping bronze CDC data. DLQ payloads are redacted (any embedded vended SAS / `abfss://`
+URL is masked).
 
 **Beta not enabled** — see the 403 case above; this is the symptom, not a separate
 error. The failure is a refused credential-vend, surfaced as a 403 from

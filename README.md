@@ -20,6 +20,8 @@ Pin versions and gate upgrades behind the test suite. UPDATE/DELETE/MERGE are no
 - **Three flush dials** — `flush.size` (rows), `flush.bytes` (target file size), `flush.interval.ms` (max latency); whichever trips first commits.
 - **Effectively-once** — each per-partition commit is stamped `SetTransaction(appId, kafkaOffset)`; replays after a crash are no-ops. Offsets are returned from `preCommit` only after the Delta commit succeeds.
 - **Streaming low-latency commits** — the snapshot is loaded once per table and the post-commit snapshot is reused (no per-commit log re-read); backfill and checkpoint run off the commit path.
+- **Fail-closed error handling** — poison records (null/non-Struct value or schema mismatch) and unwritable batches are routed to the configured DLQ via Connect's errant-record reporter; with no DLQ the task fails rather than silently advancing past unwritten bronze rows. Causes are redacted before they reach DLQ headers or task-failure logs.
+- **Bounded memory under backpressure** — at most ~1,000,000 records are buffered across all partitions; past the ceiling `put()` throws `RetriableException` so Connect pauses and re-delivers until flushes drain, keeping a stalled flush from OOMing the worker.
 
 ## How it works
 
@@ -116,7 +118,7 @@ These are a floor — the harness runs in a single container cross-region to ADL
 - Nested STRUCT is supported; top-level ARRAY/MAP columns are rejected.
 - Azure/ADLS Gen2 (`abfss://`) only for the live path.
 - Depends on the Databricks Beta and the `@Evolving` Kernel write API (see [Status](#status)).
-- Credential refresh for very long-running tasks is still being hardened.
+- Credential refresh is automatic: a cached catalog-managed table is re-resolved (creds re-vended, engine/committer/snapshot rebuilt) ~40 min after resolve, before the vended SAS's ~1h TTL expires, and the bearer token is read from config on each request so a re-minted token is picked up live.
 
 ## License
 

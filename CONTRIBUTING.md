@@ -116,6 +116,22 @@ not what — the SAS-provider wiring in `UcTableResolver` and the async-maintena
 `DeltaKernelWriter` are there because the obvious approach was wrong, and the comments say so. Skip
 javadoc that restates a signature. No AI-padding.
 
+## Spec-first, test-driven
+
+[docs/SPEC.md](docs/SPEC.md) is the source of truth, not an after-the-fact writeup. For a behavior
+change, work in this order, in the same PR:
+
+1. **Spec first** — add or update the relevant requirement under
+   [Requirements & acceptance](docs/SPEC.md#requirements--acceptance) (and the design prose it touches),
+   including its acceptance criteria. If the change invalidates a decision/known-gap, update that too —
+   the SPEC must never drift behind the code.
+2. **Test next** — write the test that encodes the acceptance criteria and watch it fail.
+3. **Code last** — implement until the test is green, then run the offline suite (and the relevant live
+   test if the write path changed).
+
+Each requirement links to the test(s) that enforce it; keep that traceability intact when you add or
+move tests.
+
 ## Pull requests
 
 Small, focused PRs. Keep `mvn test` green; if a change touches the write path, run the relevant live
