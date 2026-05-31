@@ -25,6 +25,11 @@ public final class UcTableResolver implements TableResolver {
   // ${topic} (whole topic) or ${topic[N]} (Nth dot-segment, 0-indexed).
   private static final Pattern TOPIC_TOKEN = Pattern.compile("\\$\\{topic(?:\\[(\\d+)\\])?\\}");
 
+  // A topic value substituted into a UC name must already be a valid identifier part. UC identifiers
+  // cap at 255 chars.
+  private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z0-9_]+");
+  private static final int MAX_IDENTIFIER_LEN = 255;
+
   private final UnityCatalogClient uc;
   private final String tableNameFormat; // e.g. "main.ingestion.${topic}" or "bronze.${topic[0]}.${topic[2]}"
   private final Map<String, String> topicToTable; // explicit topic -> catalog.schema.table overrides
@@ -121,7 +126,7 @@ public final class UcTableResolver implements TableResolver {
   }
 
   // Substitute ${topic} (whole topic) and ${topic[N]} (Nth dot-segment, 0-indexed); every
-  // substituted value is sanitised to a valid identifier part.
+  // substituted value must already be a valid identifier part (see identifierPart).
   private static String render(String format, String topic) {
     String[] seg = topic.split("\\.", -1);
     Matcher m = TOPIC_TOKEN.matcher(format);
@@ -130,7 +135,7 @@ public final class UcTableResolver implements TableResolver {
       String idx = m.group(1);
       String rep;
       if (idx == null) {
-        rep = sanitize(topic);
+        rep = identifierPart(topic, topic);
       } else {
         final int i;
         try {
@@ -145,7 +150,7 @@ public final class UcTableResolver implements TableResolver {
               "table.name.format references ${topic[" + i + "]} but topic '" + topic
                   + "' has only " + seg.length + " dot-segment(s)");
         }
-        rep = sanitize(seg[i]);
+        rep = identifierPart(seg[i], topic);
       }
       m.appendReplacement(out, Matcher.quoteReplacement(rep));
     }
@@ -153,8 +158,24 @@ public final class UcTableResolver implements TableResolver {
     return out.toString();
   }
 
-  private static String sanitize(String topic) {
-    // Kafka topics allow chars not valid in table names; normalise conservatively.
-    return topic.replaceAll("[^A-Za-z0-9_]", "_");
+  // Validate a topic-derived value as a UC identifier part. We deliberately reject out-of-set
+  // characters rather than fold them to '_': folding is non-injective (orders.eu, orders/eu,
+  // orders-eu would all collapse to orders_eu), so under an untrusted/regex subscription a crafted
+  // topic could collide onto a victim's table. Dotted topics route via ${topic[N]} segment tokens
+  // (the dot is the delimiter); anything else routes via an explicit topic.to.table mapping, which is
+  // matched on the exact topic and never transformed.
+  private static String identifierPart(String value, String topic) {
+    if (value.length() > MAX_IDENTIFIER_LEN) {
+      throw new ConnectException(
+          "Routing for topic '" + topic + "' produced an identifier part of " + value.length()
+              + " chars, over the " + MAX_IDENTIFIER_LEN + " limit");
+    }
+    if (!IDENTIFIER.matcher(value).matches()) {
+      throw new ConnectException(
+          "Routing for topic '" + topic + "' produced '" + value
+              + "', which is not a valid UC identifier part [A-Za-z0-9_]; use ${topic[N]} segment "
+              + "tokens or an explicit topic.to.table mapping");
+    }
+    return value;
   }
 }

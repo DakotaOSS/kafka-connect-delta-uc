@@ -164,7 +164,7 @@ Verified keys (`DeltaSinkConfig`). Defaults shown.
 |---|---|---|
 | `databricks.workspace.url` | — | UC REST base URL, e.g. `https://adb-1234567890.1.azuredatabricks.net` |
 | `databricks.token` | — | bearer token (PAT/OAuth/AAD); externalize via config provider |
-| `table.name.format` | `main.ingestion.${topic}` | Default template. `${topic}` = whole sanitised topic (`[^A-Za-z0-9_]`→`_`); `${topic[N]}` = its Nth dot-segment (0-indexed), so a structured topic maps to any `catalog.schema.table`, e.g. `bronze.${topic[0]}.${topic[2]}`. Must resolve to 3 parts. |
+| `table.name.format` | `main.ingestion.${topic}` | Default template. `${topic}` = whole topic; `${topic[N]}` = its Nth dot-segment (0-indexed), so a structured topic maps to any `catalog.schema.table`, e.g. `bronze.${topic[0]}.${topic[2]}`. Each substituted value must be a valid identifier (`[A-Za-z0-9_]`, ≤255) or routing is rejected. Must resolve to 3 parts. |
 | `topic.to.table` | (none) | Explicit per-topic overrides that win over the template: `<topic>:<catalog>.<schema>.<table>,...` |
 | `partition.columns` | (none) | partition cols, used only when this connector creates a new table |
 | `flush.size` | `500` | rows buffered per partition before commit; `0` disables the row dial |
@@ -183,13 +183,15 @@ Concurrency: a multi-partition topic's partitions may spread across tasks, so se
 effectively-once; UC conflict arbitration is the safety net for same-table
 concurrency, not the primary strategy.
 
-Security: `${topic}`/`${topic[N]}` sanitise each value (`[^A-Za-z0-9_]`→`_`), so
-distinct topics can flatten to the same name (`orders-v2` and `orders.v2` both →
-`orders_v2`). Under an open `topics.regex` subscription where topic names are
-untrusted, prefer explicit `topic.to.table` entries (matched on the exact topic) or
-a topic allowlist, so a crafted topic can't collide onto another table. UC still
-gates every write by the principal's grants, so the blast radius is limited to
-tables the connector can already write.
+Security: a value substituted by `${topic}`/`${topic[N]}` must already be a valid
+identifier part (`[A-Za-z0-9_]`, ≤255 chars); out-of-set characters are **rejected**
+at routing time, not folded to `_`. Folding was non-injective (`orders.eu`,
+`orders-eu`, `orders/eu` all collapsed to `orders_eu`), so under an untrusted
+`topics.regex` subscription a crafted topic could collide onto a victim's table.
+Route dotted topics via `${topic[N]}` segment tokens (the dot is the delimiter), or
+pin arbitrary topics with explicit `topic.to.table` entries (matched on the exact
+topic, never transformed). UC also gates every write by the principal's grants, so
+the blast radius is limited to tables the connector can already write.
 
 Tuning: the three flush dials trip independently, whichever first. `flush.size` /
 `flush.bytes` flush opportunistically inside `put` when a buffer fills;
@@ -334,7 +336,10 @@ under the table's storage path. Delta ignores uncommitted files; `VACUUM` remove
 them.
 
 **Wrong table name.** `table.name.format` must resolve to an existing 3-part UC
-name (`catalog.schema.table`). `${topic}` is sanitised (`[^A-Za-z0-9_]`→`_`) before
-substitution, so `orders.public` becomes `orders_public` — name the table to match.
+name (`catalog.schema.table`). A value substituted by `${topic}`/`${topic[N]}` must
+be a valid identifier (`[A-Za-z0-9_]`, ≤255); out-of-set characters (e.g. the dots
+in a whole topic, or a `-`) are rejected at routing time rather than folded. Route a
+dotted topic like `orders.public` via `${topic[N]}` segment tokens, or pin it with
+`topic.to.table` — then name the table to match.
 
 See [SPEC.md](SPEC.md) for the full design, decisions, and known gaps.

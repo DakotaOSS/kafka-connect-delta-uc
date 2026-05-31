@@ -70,7 +70,7 @@ The token principal needs `EXTERNAL USE SCHEMA` on the target schema(s) — and 
 |---|---|---|
 | `databricks.workspace.url` | — | Workspace base URL for the UC REST API. |
 | `databricks.token` | — | Bearer token (PAT/OAuth/AAD). Principal needs `EXTERNAL USE SCHEMA`. |
-| `table.name.format` | `main.ingestion.${topic}` | Default template. `${topic}` = whole sanitised topic; `${topic[N]}` = its Nth dot-segment (0-indexed), so a structured topic maps to any `catalog.schema.table` (e.g. `bronze.${topic[1]}.${topic[3]}`). |
+| `table.name.format` | `main.ingestion.${topic}` | Default template. `${topic}` = whole topic; `${topic[N]}` = its Nth dot-segment (0-indexed), so a structured topic maps to any `catalog.schema.table` (e.g. `bronze.${topic[1]}.${topic[3]}`). Each substituted value must be a valid identifier (`[A-Za-z0-9_]`, ≤255) or routing is rejected. |
 | `topic.to.table` | (none) | Per-topic overrides that win over the template: `<topic>:<catalog>.<schema>.<table>,...` |
 | `flush.size` | `500` | Rows buffered per partition before commit. `0` disables the row dial. |
 | `flush.bytes` | `0` | Flush at approx buffered bytes, for target file size (e.g. `134217728` = 128 MiB). `0` disables. |

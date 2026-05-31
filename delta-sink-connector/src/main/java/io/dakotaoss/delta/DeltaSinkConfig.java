@@ -111,9 +111,11 @@ public final class DeltaSinkConfig extends AbstractConfig {
               "main.ingestion.${topic}",
               ConfigDef.Importance.HIGH,
               "Default UC name template for topics not matched by topic.to.table. ${topic} is the "
-                  + "whole (sanitised) topic; ${topic[N]} is its Nth dot-segment (0-indexed), so a "
-                  + "structured topic can route to any catalog.schema.table, e.g. "
-                  + "\"bronze.${topic[0]}.${topic[2]}\". Must resolve to catalog.schema.table.")
+                  + "whole topic; ${topic[N]} is its Nth dot-segment (0-indexed), so a structured "
+                  + "topic can route to any catalog.schema.table, e.g. \"bronze.${topic[0]}.${topic[2]}\". "
+                  + "Each substituted value must be a valid identifier ([A-Za-z0-9_], <=255 chars) or "
+                  + "the routing is rejected -- route dotted topics via ${topic[N]} or pin them with "
+                  + "topic.to.table. Must resolve to catalog.schema.table.")
           .define(
               TOPIC_TO_TABLE,
               ConfigDef.Type.LIST,
