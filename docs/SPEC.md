@@ -217,7 +217,7 @@ Config surface is `DeltaSinkConfig`. Defaults shown.
 inside `put` when a buffer fills. `flush.interval.ms` is enforced by a scheduler that flushes any
 non-empty buffer every interval, so queued rows commit within the interval even under light traffic.
 The **5 s default for `flush.interval.ms` is the max-latency SLA** — it mirrors Zerobus and is
-comfortable even from an out-of-region harness (benchmarks show ~2 s p50 commit at small batches).
+comfortable even from an out-of-region harness (benchmarks show ~1.7 s p50 commit at small batches).
 Raise `flush.bytes` toward 128–256 MiB to amortize fixed per-commit cost and cut file count; that
 raises latency and per-commit memory.
 
@@ -433,11 +433,12 @@ payload, through the streaming write path (snapshot reuse + async backfill/check
 the harness runs single-container cross-region, so every commit pays WAN latency a co-located worker
 would not.
 
-- **100M rows in ~7 min** (424 s, 50 commits) — **235k rows/s sustained**.
-- **271k rows/s peak** at 2.5M-row batches.
-- **~2 s p50 commit** at small batches — the 5 s flush cadence is comfortable, tighter in-region.
-- **Latency flat at scale** — no upward trend across the 100M run's 50 commits; appends are O(1) in
-  table history because publish + checkpoint run off the commit path.
+- **267k rows/s peak** at 2.5M-row batches; **100M rows sustained** end-to-end.
+- **~1.7 s p50 commit** at small (100k-row) batches — the 5 s flush cadence is comfortable, tighter in-region.
+- **Per-commit latency flat at scale** — no upward trend across the 100M run's 100 commits (~3.5 s each);
+  appends are O(1) in table history because publish + checkpoint run off the commit path.
+- **8 concurrent tables in one JVM** at ~51k aggregate rows/s and **2–3% CPU** — the worker is
+  WAN-latency-bound, not CPU-bound; heap (~1 GB at 8 tables), not compute, is the density ceiling.
 
 Bigger batches amortize the fixed per-commit cost (snapshot load + Parquet + UC commit), trading commit
 latency and file count for throughput — exposed directly via `flush.size` / `flush.bytes` /

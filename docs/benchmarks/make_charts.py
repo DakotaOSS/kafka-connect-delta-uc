@@ -99,12 +99,46 @@ ax.plot(cx, cy, marker="o", ms=3, color=ACCENT, lw=1.5, label="sync commit")
 mean = statistics.mean(cy)
 ax.axhline(mean, color="#888", ls=":", lw=1.2, label=f"mean {mean:.1f}s")
 ax.set_ylim(0, max(cy) * 1.25)
-ax.set_title("Per-commit latency across 100M rows (50 commits) — flat, no growth")
+ax.set_title(f"Per-commit latency across 100M rows ({len(cx)} commits) — flat, no growth")
 ax.set_xlabel("commit #")
 ax.set_ylabel("sync commit (s)")
 ax.legend()
 fig.tight_layout()
 fig.savefig(BASE / "latency-timeline-100m.png")
 plt.close(fig)
+
+# --- Multi-table scaling: aggregate throughput + resource use vs concurrent table count ---
+mt_path = BASE / "multi-table-scaling.csv"
+if mt_path.exists():
+    mt = read("multi-table-scaling.csv")
+    tlabels = [r["tables"] for r in mt]
+    agg = [int(r["aggregate_rows_s"]) for r in mt]
+    fig, ax = plt.subplots(figsize=(7, 4))
+    bar(ax, tlabels, agg, ACCENT)
+    ax.set_title("Aggregate throughput vs concurrent tables (one JVM, shared FS cache)")
+    ax.set_xlabel("concurrent tables")
+    ax.set_ylabel("aggregate rows / sec")
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: human(x)))
+    fig.tight_layout()
+    fig.savefig(BASE / "throughput-vs-tables.png")
+    plt.close(fig)
+
+    heap = [float(r["peak_heap_mb"]) for r in mt]
+    cpu = [float(r["avg_cpu_pct"]) for r in mt]
+    x = np.arange(len(tlabels))
+    fig, ax = plt.subplots(figsize=(7, 4))
+    l1 = ax.plot(x, heap, marker="o", color=ACCENT, lw=1.5, label="peak heap (MB)")
+    ax.set_xlabel("concurrent tables")
+    ax.set_ylabel("peak heap (MB)", color=ACCENT)
+    ax.set_xticks(x, tlabels)
+    ax2 = ax.twinx()
+    ax2.grid(False)
+    l2 = ax2.plot(x, cpu, marker="s", color=ACCENT2, lw=1.5, label="avg process CPU (%)")
+    ax2.set_ylabel("avg process CPU (%)", color=ACCENT2)
+    ax.set_title("Resource use vs concurrent tables (in-JVM)")
+    ax.legend(l1 + l2, [h.get_label() for h in l1 + l2], loc="upper left")
+    fig.tight_layout()
+    fig.savefig(BASE / "resource-vs-tables.png")
+    plt.close(fig)
 
 print("charts written:", [p.name for p in sorted(BASE.glob("*.png"))])

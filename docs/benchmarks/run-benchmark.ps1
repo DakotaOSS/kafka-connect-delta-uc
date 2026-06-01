@@ -5,7 +5,9 @@
     DATABRICKS_HOST   https://adb-xxxx.azuredatabricks.net
     DATABRICKS_TOKEN  a PAT, or an Entra token:
                         az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv
-    BENCH_TABLE       catalog.schema.table — a catalog-managed table with the envelope schema (see bench-table.sql)
+    BENCH_TABLE       catalog.schema.table — a catalog-managed table with the envelope schema (see bench-table.sql).
+                      Use a FRESH table per full run: one left in a partially-committed state from an
+                      interrupted run can desync the UC commit coordinator and make commits retry.
   Optional:
     BENCH_ROWS   total rows to write   (default 1000000)
     BENCH_BATCH  rows per commit       (default 1000000)
