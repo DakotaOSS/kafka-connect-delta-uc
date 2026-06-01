@@ -12,16 +12,21 @@ backfill/checkpoint).
 
 ## Highlights
 
-- **100M rows in ~7 min** (424 s, 50 commits) — **235k rows/s sustained** to a managed UC table.
-- **271k rows/s peak** at large (2.5M-row) batches.
-- **~2 s p50 commit latency** at small batches — a 5 s max-latency flush cadence is comfortable even
-  from this out-of-region harness, and tighter in-region.
-- **Latency stays flat at scale** — across all 50 commits of the 100M run there is no upward trend;
-  appends are O(1) in table history thanks to backfill + periodic checkpoints.
+- **267k rows/s peak** at large (2.5M-row) batches — to a managed, catalog-managed UC table, no Spark.
+- **~1.7 s p50 commit latency** at small (100k-row) batches — a 5 s max-latency flush cadence is
+  comfortable even from this out-of-region harness, and tighter in-region.
+- **Per-commit latency stays flat at scale** — across all 100 commits of the 100M-row run there is no
+  upward trend (~3.5 s each); appends are O(1) in table history thanks to off-path backfill + periodic
+  checkpoints.
+- **100M rows sustained** end-to-end; aggregate throughput rises with batch size as the fixed
+  per-commit cost (snapshot load + Parquet + UC-coordinated commit) is amortized.
 
 ## Scaling
 
-Throughput rises into steady state and then holds, all the way to 100M rows.
+Throughput climbs as larger batches amortize fixed commit cost; at a fixed 1M-row batch it sustains a
+160–230k rows/s band out to 100M rows. (The 100M aggregate also carries the end-of-run drain of ~100
+async backfill/checkpoint tasks — work a long-running worker overlaps continuously rather than paying
+at the end — so per-commit latency, below, is the cleaner steady-state signal.)
 
 ![Throughput vs volume](throughput-vs-volume.png)
 
@@ -38,7 +43,7 @@ whichever trips first.
 
 ## Latency holds flat at scale
 
-Per-commit synchronous latency over the full 100M-row run — no growth as the table accumulates 50
+Per-commit synchronous latency over the full 100M-row run — no growth as the table accumulates 100
 versions (publish + checkpoint run off the commit path).
 
 ![Per-commit latency across 100M rows](latency-timeline-100m.png)
@@ -46,26 +51,93 @@ versions (publish + checkpoint run off the commit path).
 <details>
 <summary><b>Full data</b></summary>
 
-**Batch-size sweep (5M rows, 1M-row reference excluded):**
+**Batch-size sweep (5M rows), one fresh table per point:**
 
-| batch (rows) | rows/sec | commits | p50 commit | p99 commit | files | total size |
-|---:|---:|---:|---:|---:|---:|---:|
-| 100,000 | 29,641 | 50 | 1.9 s | 5.3 s | 50 | 88.7 MB |
-| 250,000 | 47,974 | 20 | 5.0 s | 10.4 s | 20 | 69.0 MB |
-| 500,000 | 85,591 | 10 | 5.5 s | 10.8 s | 10 | 62.4 MB |
-| 1,000,000 | 200,904 | 5 | 3.9 s | 6.9 s | 5 | 59.1 MB |
-| 2,500,000 | 270,704 | 2 | 8.4 s | 8.4 s | 2 | 57.1 MB |
+| batch (rows) | rows/sec | commits | p50 commit | p99 commit |
+|---:|---:|---:|---:|---:|
+| 100,000 | 29,999 | 50 | 1.70 s | 5.12 s |
+| 250,000 | 91,623 | 20 | 2.07 s | 5.54 s |
+| 500,000 | 122,219 | 10 | 3.23 s | 6.44 s |
+| 1,000,000 | 225,566 | 5 | 3.30 s | 6.58 s |
+| 2,500,000 | 267,004 | 2 | 8.36 s | 8.36 s |
 
-**Volume scaling (1M-row batches; 100M uses 2M-row batches):**
+**Volume scaling (1M-row batches), one fresh table per point:**
 
-| rows | rows/sec | commits | p50 commit | files | total size |
-|---:|---:|---:|---:|---:|---:|
-| 100,000 | 16,020 | 1 | 5.0 s | 1 | 1.8 MB |
-| 1,000,000 | 107,064 | 1 | 7.9 s | 1 | 11.8 MB |
-| 10,000,000 | 203,373 | 10 | 4.1 s | 10 | 118 MB |
-| 100,000,000 | 235,853 | 50 | 7.5 s | 50 | 1.15 GB |
+| rows | rows/sec | commits |
+|---:|---:|---:|
+| 1,000,000 | 92,254 | 1 |
+| 10,000,000 | 227,747 | 10 |
+| 100,000,000 | 161,050 | 100 |
+
+_(100M aggregate includes the end-of-run async-maintenance drain; see the flat per-commit timeline above.)_
 
 </details>
+
+## Concurrent tables in one worker
+
+A single Connect task usually fans out across many topic-partitions / tables. Here one JVM writes to
+N catalog-managed tables at once (each its own envelope stream), sharing one filesystem cache and one
+flush path. Aggregate throughput climbs as tables are added — concurrent commits overlap each other's
+WAN round-trips — while **per-table** throughput falls, because the per-partition flush is serialized
+under a single lock (the head-of-line cost this connector pays for strict per-partition commit order).
+
+![Aggregate throughput vs concurrent tables](throughput-vs-tables.png)
+
+![Resource use vs concurrent tables](resource-vs-tables.png)
+
+| concurrent tables | aggregate rows/s | per-table rows/s | p50 commit | p99 commit | peak heap | avg CPU |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 32,152 | 32,152 | 1.65 s | 5.20 s | 275 MB | 3% |
+| 2 | 43,287 | 21,643 | 1.65 s | 5.39 s | 562 MB | 3% |
+| 4 | 48,578 | 12,144 | 1.72 s | 5.75 s | 714 MB | 3% |
+| 8 | 51,113 | 6,389 | 1.87 s | 5.81 s | 1,030 MB | 2% |
+
+The headline is the **CPU column: 2–3% average** (peak 42–86% on brief commit bursts). The worker is
+**WAN-latency-bound, not CPU-bound** — it spends nearly all its time waiting on cross-region ADLS +
+UC round-trips, not computing. Heap scales roughly linearly with table count (per-table snapshot state
++ Parquet buffers), so density, not CPU, is the ceiling on tables-per-worker. Two consequences: (1)
+in-region deployment, where round-trips are ~1 ms instead of ~50 ms, should multiply these numbers;
+(2) the serialized flush leaves throughput on the table — concurrent per-partition commits are the
+obvious next optimization.
+
+## JVM vs. Rust (delta-rs): would a rewrite be faster?
+
+A planned sister project writes the same connector in Rust (on [delta-rs](https://github.com/delta-io/delta-rs))
+to benchmark against this one. Grounding the prediction in the data above:
+
+- **Throughput: likely a wash.** At 2–3% CPU the bottleneck is WAN round-trip latency to ADLS and the
+  UC commit coordinator, not compute or GC. Rust can't make the network faster, so per-commit latency
+  — and therefore throughput at a given batch size — should land within noise of the JVM. Whoever
+  pipelines commits more aggressively (overlapping in-flight commits) wins here, and that's an
+  architecture choice, not a language one.
+- **Memory: Rust wins, clearly.** This connector's heap runs 275 MB → ~1 GB across 1→8 tables. A
+  delta-rs writer (Rust + Arrow, no JVM, no managed heap) would do the same work in tens of MB. For a
+  high-fanout worker or a serverless/sidecar deployment, that density gap is the most material
+  difference.
+- **Tail latency: Rust wins modestly.** Part of the JVM's p99 (≈5 s vs p50 ≈1.7 s) is WAN variance,
+  but some is GC and JIT warmup. No managed heap means no GC pauses and a flat cold start — worth more
+  to a latency-SLO sidecar than to a throughput-oriented sink.
+- **Cold start / density: Rust wins.** No JIT warmup, sub-second start, small static binary — better
+  for scale-to-zero and packing many writers per host.
+- **Ecosystem fit: the JVM wins, and it's not close for *this* deployment.** Kafka Connect is
+  JVM-native, so this connector runs **in-process** in the worker — no extra hop, no serialization
+  boundary. Delta Kernel Java is the reference implementation of the protocol, and the UC
+  commit-coordinator client (the catalog-managed write path this connector depends on) is a
+  first-class JVM library. delta-rs is mature for plain Delta read/write, but the **catalog-managed /
+  UC-coordinated commit** path is newer ground in Rust.
+
+A Rust sink would reach Kafka Connect one of three ways, in rising order of integration cost: a
+**standalone consumer** (its own Kafka consumer loop — simplest, but outside Connect's offset/rebalance
+machinery); an **HTTP sidecar behind Connect** (a thin JVM sink SMT/connector POSTs batches to a
+local Rust writer — keeps Connect semantics, adds a localhost serialization hop); or **in-process via
+JNI/FFI** (lowest latency, highest fragility). The HTTP sidecar is the pragmatic middle: it keeps
+Connect's rebalance/offset handling while getting Rust's memory and cold-start profile for the actual
+Delta+UC write.
+
+**Bottom line:** for this WAN-bound, append-only workload, expect **throughput parity** with Rust
+winning on **memory footprint, tail latency, and cold start**, and the JVM winning on **ecosystem
+fit** (in-process Connect + reference Kernel + UC client). The interesting wins on either side come
+from pipelining commits and moving in-region — not from the language.
 
 ## Reproduce
 

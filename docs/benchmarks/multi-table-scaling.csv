@@ -1,0 +1,5 @@
+﻿tables,aggregate_rows_s,per_table_rows_s,commit_ms_p50,commit_ms_p99,peak_heap_mb,avg_cpu_pct,peak_cpu_pct,peak_threads
+1,32152,32152,1653,5197,275,3,42,55
+2,43287,21643,1653,5385,562,3,55,70
+4,48578,12144,1721,5746,714,3,75,86
+8,51113,6389,1868,5810,1030,2,86,115
