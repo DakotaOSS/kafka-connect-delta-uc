@@ -42,13 +42,19 @@ public final class RecordConverter {
     int colCount = kernelSchema.length();
     ColumnVector[] columns = new ColumnVector[colCount];
 
+    // Cast each row once, not once per column: the inner loop ran asStruct() colCount times per row.
+    Struct[] rows = new Struct[rowCount];
+    for (int r = 0; r < rowCount; r++) {
+      rows[r] = asStruct(records.get(r).value());
+    }
+
     for (int c = 0; c < colCount; c++) {
       StructField kernelField = kernelSchema.at(c);
       // Missing field would NPE below; surface it as a DataException instead.
       Field connectField = requireField(connectValueSchema, kernelField.getName());
       Object[] values = new Object[rowCount];
       for (int r = 0; r < rowCount; r++) {
-        Struct value = asStruct(records.get(r).value());
+        Struct value = rows[r];
         values[r] = value == null ? null : value.get(connectField);
       }
       columns[c] = buildColumn(kernelField.getDataType(), connectField.schema(), values, 1);
