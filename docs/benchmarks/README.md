@@ -156,5 +156,26 @@ It runs `BenchmarkTest` in a `maven:3.9-eclipse-temurin-17` container against th
 prints per-commit + summary `[BENCH-RESULT]` lines. Regenerate the charts from the CSVs with
 `uv run --with matplotlib --with numpy python make_charts.py`.
 
+### Durable multi-point sweep
+
+`run-benchmark` does one point against a table you pre-create. The tables above came from a *sweep* —
+many points back to back — and at that length three failure modes turn silent: a token expiring
+mid-run becomes a retry storm that looks like a hang; reusing one table lets a partially-committed
+point desync the UC commit coordinator so the next point storms too; and buffered output leaves you
+blind to progress. [`run-sweep.sh`](run-sweep.sh) (Windows: [`run-sweep.ps1`](run-sweep.ps1)) closes
+all three — a **fresh, uniquely-named table per point** (dropped after), an optional **token re-mint
+before every point**, **live** per-commit streaming to a per-point log, and a **per-point timeout**
+that kills a storming point loudly and moves on (any failure → non-zero exit). It needs a SQL
+warehouse to create/drop the tables:
+
+```bash
+export DATABRICKS_HOST="https://adb-xxxx.azuredatabricks.net"
+export BENCH_WAREHOUSE_ID="<sql-warehouse-id>"
+# re-minted before each point so a long sweep never carries an about-to-expire token:
+export BENCH_MINT_CMD='az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv'
+export BENCH_BATCHES="100000 250000 500000 1000000 2500000" BENCH_SWEEP_ROWS=5000000
+./run-sweep.sh              # appends batch-sweep.csv; logs under sweep-logs/
+```
+
 _Raw data: [`batch-sweep.csv`](batch-sweep.csv), [`volume-scaling.csv`](volume-scaling.csv),
 [`latency-timeline-100m.csv`](latency-timeline-100m.csv)._
