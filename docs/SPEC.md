@@ -36,7 +36,8 @@ Non-goals:
 - in-connector UPDATE/DELETE/MERGE. Kernel cannot do it; the connector stays bronze-only.
 - partitioned writes. The writer commits one unpartitioned batch per flush. Partitioning is an
   extension point, not v0.1.
-- nested-collection columns beyond STRUCT. ARRAY/MAP are rejected at schema-map time.
+- typed collections beyond ARRAY/MAP/STRUCT (e.g. UNION). STRUCT, ARRAY, and MAP map; other Connect
+  composite types are rejected at schema-map time.
 - cross-table atomicity. Catalog commits coordinate per table.
 - owning Kafka offset storage. Connect owns offsets; the connector only gates what it returns from
   `preCommit`.
@@ -54,9 +55,11 @@ Each per-partition commit carries `SetTransaction(appId=<connector>:<topic>-<par
 - *Tests:* `DeltaKernelWriterTest.idempotentReplayDoesNotDuplicate`, `DeltaSinkTaskTest.preCommitFlushesAndReturnsNextOffset`.
 
 ### R2 — Append-only bronze
-No UPDATE/DELETE/MERGE; nested STRUCT maps, while top-level ARRAY/MAP are rejected at schema-map time.
-- *Accept:* an ARRAY/MAP column fails mapping; only appends are emitted.
-- *Tests:* `SchemaMapperTest`, `SchemaMapperGuardTest`, `RecordConverterTest`, `RecordConverterNestedTest`.
+No UPDATE/DELETE/MERGE; nested STRUCT, ARRAY, and MAP map recursively (bounded by the depth cap) and
+convert to physical child vectors.
+- *Accept:* array/map columns map and round-trip through a write/read-back; only appends are emitted.
+- *Tests:* `SchemaMapperTest`, `SchemaMapperGuardTest`, `RecordConverterTest`, `RecordConverterNestedTest`,
+  `RecordConverterCollectionTest`, `DeltaKernelWriterCollectionTest`, `data.GenericColumnVectorTest`.
 
 ### R3 — Injective, bounded routing
 `${topic}`/`${topic[N]}` substitutes must be valid UC identifier parts (`[A-Za-z0-9_]`, ≤255) or routing is rejected (never folded); `topic.to.table` overrides win and match the exact topic; the result is 3-part.
@@ -415,7 +418,8 @@ path. Delta ignores uncommitted files; `VACUUM` removes them.
 - **Schema evolution.** Additive evolution flows through; UC validates/rejects breaking changes at
   commit. A rejected commit is routed to the DLQ by the generic fail-closed flush handler (no
   auto-evolution or retry); automatic schema-evolution / retry is not yet built.
-- **Nested collections.** ARRAY/MAP columns are rejected at schema-map time.
+- **Nested collections.** STRUCT, ARRAY, and MAP map and write (recursively, bounded by the depth cap).
+  Other Connect composite types (e.g. UNION) are still rejected at schema-map time.
 
 ## Risks
 

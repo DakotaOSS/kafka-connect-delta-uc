@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.delta.kernel.types.ArrayType;
 import io.delta.kernel.types.IntegerType;
+import io.delta.kernel.types.MapType;
 import io.delta.kernel.types.StringType;
 import io.delta.kernel.types.StructType;
 import org.apache.kafka.connect.data.Decimal;
@@ -48,46 +50,88 @@ class SchemaMapperGuardTest {
   }
 
   @Test
-  void rejectsTopLevelArrayField() {
-    Schema withArray =
+  void arrayElementNullabilityFollowsElementSchema() {
+    // optional element schema -> containsNull; required element -> not.
+    Schema optElems =
+        SchemaBuilder.struct()
+            .field("tags", SchemaBuilder.array(Schema.OPTIONAL_STRING_SCHEMA).build())
+            .build();
+    Schema reqElems =
         SchemaBuilder.struct()
             .field("tags", SchemaBuilder.array(Schema.STRING_SCHEMA).build())
             .build();
-    assertThrows(UnsupportedOperationException.class, () -> SchemaMapper.toKernel(withArray));
+    assertTrue(((ArrayType) SchemaMapper.toKernel(optElems).at(0).getDataType()).containsNull());
+    assertFalse(((ArrayType) SchemaMapper.toKernel(reqElems).at(0).getDataType()).containsNull());
   }
 
   @Test
-  void rejectsTopLevelMapField() {
-    Schema withMap =
-        SchemaBuilder.struct()
-            .field("attrs", SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.STRING_SCHEMA).build())
-            .build();
-    assertThrows(UnsupportedOperationException.class, () -> SchemaMapper.toKernel(withMap));
-  }
-
-  @Test
-  void rejectsArrayNestedInsideStruct() {
-    Schema inner =
-        SchemaBuilder.struct()
-            .field("tags", SchemaBuilder.array(Schema.STRING_SCHEMA).build())
-            .build();
-    Schema envelope = SchemaBuilder.struct().field("after", inner).build();
-    assertThrows(UnsupportedOperationException.class, () -> SchemaMapper.toKernel(envelope));
-  }
-
-  @Test
-  void mapMessageDoesNotLeakRedactableContent() {
-    // the rejection message echoes the Connect type, not user content; assert it stays clean even
-    // when a SAS-shaped string rides along as a field name.
-    Schema withMap =
+  void mapValueNullabilityFollowsValueSchema() {
+    Schema optVals =
         SchemaBuilder.struct()
             .field(
-                "sig=abc&se=2030",
-                SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.STRING_SCHEMA).build())
+                "attrs",
+                SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.OPTIONAL_INT32_SCHEMA).build())
             .build();
-    UnsupportedOperationException e =
-        assertThrows(UnsupportedOperationException.class, () -> SchemaMapper.toKernel(withMap));
-    assertFalse(e.getMessage().contains("sig=abc"));
+    Schema reqVals =
+        SchemaBuilder.struct()
+            .field("attrs", SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.INT32_SCHEMA).build())
+            .build();
+    assertTrue(((MapType) SchemaMapper.toKernel(optVals).at(0).getDataType()).isValueContainsNull());
+    assertFalse(
+        ((MapType) SchemaMapper.toKernel(reqVals).at(0).getDataType()).isValueContainsNull());
+  }
+
+  @Test
+  void mapsArrayOfStructAndMapOfStruct() {
+    Schema elem =
+        SchemaBuilder.struct()
+            .field("id", Schema.INT32_SCHEMA)
+            .field("name", Schema.OPTIONAL_STRING_SCHEMA)
+            .build();
+    Schema connect =
+        SchemaBuilder.struct()
+            .field("rows", SchemaBuilder.array(elem).build())
+            .field("byId", SchemaBuilder.map(Schema.STRING_SCHEMA, elem).build())
+            .build();
+    StructType k = SchemaMapper.toKernel(connect);
+    ArrayType arr = (ArrayType) k.at(0).getDataType();
+    assertTrue(arr.getElementType() instanceof StructType);
+    MapType map = (MapType) k.at(1).getDataType();
+    assertTrue(map.getKeyType() instanceof StringType);
+    assertTrue(map.getValueType() instanceof StructType);
+  }
+
+  @Test
+  void mapsNestedCollectionCombinations() {
+    // array<map<string,int>>, map<string,array<int>>
+    Schema connect =
+        SchemaBuilder.struct()
+            .field(
+                "rowsOfMaps",
+                SchemaBuilder.array(
+                        SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.INT32_SCHEMA).build())
+                    .build())
+            .field(
+                "listsById",
+                SchemaBuilder.map(
+                        Schema.STRING_SCHEMA, SchemaBuilder.array(Schema.INT32_SCHEMA).build())
+                    .build())
+            .build();
+    StructType k = SchemaMapper.toKernel(connect);
+    assertTrue(((ArrayType) k.at(0).getDataType()).getElementType() instanceof MapType);
+    assertTrue(((MapType) k.at(1).getDataType()).getValueType() instanceof ArrayType);
+  }
+
+  @Test
+  void rejectsCollectionNestedDeeperThanCap() {
+    // arrays count toward depth alongside structs: 33 array wrappers trips the cap.
+    Schema s = SchemaBuilder.array(Schema.INT32_SCHEMA).build();
+    for (int i = 0; i < 33; i++) {
+      s = SchemaBuilder.array(s).build();
+    }
+    Schema deep = SchemaBuilder.struct().field("nest", s).build();
+    DataException e = assertThrows(DataException.class, () -> SchemaMapper.toKernel(deep));
+    assertTrue(e.getMessage().contains("max depth"));
   }
 
   @Test

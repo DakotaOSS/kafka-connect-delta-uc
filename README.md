@@ -119,7 +119,7 @@ These are a floor — the harness runs in a single container cross-region to ADL
 
 - Append-only. No UPDATE/DELETE/MERGE (Kernel write API limitation); do DML downstream.
 - Unpartitioned writes. `partition.columns` applies only at table creation; partitioned append is an extension point.
-- Nested STRUCT is supported; top-level ARRAY/MAP columns are rejected.
+- Nested STRUCT, ARRAY, and MAP columns are supported (recursive, bounded by the schema depth cap).
 - Azure/ADLS Gen2 (`abfss://`) only for the live path.
 - Depends on the Databricks Beta and the `@Evolving` Kernel write API (see [Status](#status)).
 - Credential refresh is automatic: a cached catalog-managed table is re-resolved (creds re-vended, engine/committer/snapshot rebuilt) ~40 min after resolve, before the vended SAS's ~1h TTL expires, and the bearer token is read from config on each request so a re-minted token is picked up live.
