@@ -7,12 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-05-29
-
-Initial release. Append-only bronze writer: a Kafka Connect sink that commits
-Debezium/Kafka records into Databricks Unity Catalog **managed, catalog-managed**
-Delta tables through the Delta Kernel Java API. No Spark, no second compute plane —
-the write runs in the same Connect worker as the source connectors.
+First cut, not yet tagged: the version is `0.1.0-SNAPSHOT` and no `v0.1.0` release
+exists. Append-only bronze writer — a Kafka Connect sink that commits Debezium/Kafka
+records into Databricks Unity Catalog **managed, catalog-managed** Delta tables through
+the Delta Kernel Java API. No Spark, no second compute plane — the write runs in the
+same Connect worker as the source connectors.
 
 Depends on the Databricks **External Access to UC Managed Delta Table** Beta
 (workspace Previews toggle), DBR 16.4+, and the `@Evolving` Kernel write API
@@ -78,5 +77,4 @@ Depends on the Databricks **External Access to UC Managed Delta Table** Beta
 - Nested STRUCT supported; top-level ARRAY/MAP columns are rejected at schema-map time.
 - Azure/ADLS Gen2 (`abfss://`) only for the live path.
 
-[Unreleased]: https://github.com/DakotaOSS/kafka-connect-delta-uc/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/DakotaOSS/kafka-connect-delta-uc/releases/tag/v0.1.0
+[Unreleased]: https://github.com/DakotaOSS/kafka-connect-delta-uc/commits/main

@@ -1,5 +1,9 @@
 # kafka-connect-delta
 
+[![CI](https://github.com/DakotaOSS/kafka-connect-delta-uc/actions/workflows/ci.yml/badge.svg)](https://github.com/DakotaOSS/kafka-connect-delta-uc/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/DakotaOSS/kafka-connect-delta-uc/actions/workflows/codeql.yml/badge.svg)](https://github.com/DakotaOSS/kafka-connect-delta-uc/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Kafka Connect sink that writes to Unity Catalog managed Delta tables via the Delta Kernel Java API, no Spark.
 
 A `SinkTask` buffers Kafka records per topic-partition and commits each buffer as one Delta transaction against a Databricks **managed, catalog-managed** Delta table. Commits are coordinated through Unity Catalog (catalog commits + credential vending), so an external engine can append to a managed table without going through Databricks compute. The connector runs in the same Kafka Connect plane as your source connectors (Debezium, JDBC, HTTP) — there is no second Spark/Databricks runtime to operate.
@@ -119,6 +123,15 @@ These are a floor — the harness runs in a single container cross-region to ADL
 - Azure/ADLS Gen2 (`abfss://`) only for the live path.
 - Depends on the Databricks Beta and the `@Evolving` Kernel write API (see [Status](#status)).
 - Credential refresh is automatic: a cached catalog-managed table is re-resolved (creds re-vended, engine/committer/snapshot rebuilt) ~40 min after resolve, before the vended SAS's ~1h TTL expires, and the bearer token is read from config on each request so a re-minted token is picked up live.
+
+## Security
+
+The bearer token is the connector's only authorization boundary — scope a dedicated service principal to
+just the target schemas. Storage credentials are short-lived per-table vended SAS, never long-lived
+secrets, and tokens/SAS are redacted before any log, exception, or DLQ record. Trust boundaries, the
+authz boundary, SAS scoping, untrusted-producer-data handling, and residual risks:
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). To report a vulnerability, see [SECURITY.md](SECURITY.md)
+(do not open a public issue).
 
 ## License
 

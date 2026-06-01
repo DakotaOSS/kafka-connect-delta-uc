@@ -1,0 +1,15 @@
+# Code owners — required reviewers via branch protection.
+# Last matching pattern wins, so the security-sensitive paths below override the global owner.
+
+# Everything, unless overridden below.
+*       @jordandakota
+
+# Write path + credential/commit handling: the live-test SPOF lives here, so a maintainer reviews.
+/delta-sink-connector/        @jordandakota
+
+# Security surface — auth, redaction, threat model, CI gates.
+/SECURITY.md                  @jordandakota
+/docs/THREAT_MODEL.md         @jordandakota
+/.github/                     @jordandakota
+/.trivyignore                 @jordandakota
+/.pre-commit-config.yaml      @jordandakota
