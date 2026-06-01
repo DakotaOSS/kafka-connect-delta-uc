@@ -3,6 +3,7 @@ package io.dakotaoss.delta.schema;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.delta.kernel.data.ColumnarBatch;
@@ -17,6 +18,7 @@ import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.data.Timestamp;
+import org.apache.kafka.connect.errors.DataException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.junit.jupiter.api.Test;
 
@@ -62,5 +64,14 @@ class RecordConverterTest {
     assertEquals("alice", b.getColumnVector(1).getString(0));
     assertFalse(b.getColumnVector(1).isNullAt(0));
     assertTrue(b.getColumnVector(1).isNullAt(1));
+  }
+
+  @Test
+  void rejectsNonStructRecordValue() {
+    Schema vs = SchemaBuilder.struct().field("id", Schema.INT32_SCHEMA).build();
+    StructType kernel = SchemaMapper.toKernel(vs);
+    List<SinkRecord> recs =
+        Arrays.asList(new SinkRecord("t", 0, null, null, vs, "not-a-struct", 0L));
+    assertThrows(DataException.class, () -> RecordConverter.toBatch(kernel, vs, recs));
   }
 }
