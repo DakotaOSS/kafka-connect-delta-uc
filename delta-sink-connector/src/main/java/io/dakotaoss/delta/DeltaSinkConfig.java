@@ -29,6 +29,8 @@ public final class DeltaSinkConfig extends AbstractConfig {
   public static final String AUTH_PAT = "pat";
   public static final String AUTH_OAUTH_M2M = "oauth-m2m";
   public static final String AUTH_AZURE_ENTRA = "azure-entra";
+  public static final String AUTO_CREATE_TABLES = "auto.create.tables";
+  public static final String WAREHOUSE_ID = "databricks.warehouse.id";
   public static final String TABLE_NAME_FORMAT = "table.name.format";
   public static final String TOPIC_TO_TABLE = "topic.to.table";
   public static final String PARTITION_COLUMNS = "partition.columns";
@@ -190,7 +192,22 @@ public final class DeltaSinkConfig extends AbstractConfig {
               5_000L,
               ConfigDef.Importance.MEDIUM,
               "Max time (ms) to buffer a partition before committing, even below flush.size. "
-                  + "Drives micro-batch latency; 5s mirrors Zerobus.");
+                  + "Drives micro-batch latency; 5s mirrors Zerobus.")
+          .define(
+              AUTO_CREATE_TABLES,
+              ConfigDef.Type.BOOLEAN,
+              true,
+              ConfigDef.Importance.MEDIUM,
+              "Create an absent catalog-managed table on first write, deriving the schema from the "
+                  + "record (columns nullable). Requires the principal to also hold CREATE TABLE on "
+                  + "the target schema. Set false to require pre-created tables.")
+          .define(
+              WAREHOUSE_ID,
+              ConfigDef.Type.STRING,
+              "",
+              ConfigDef.Importance.MEDIUM,
+              "SQL warehouse id used to run CREATE TABLE for " + AUTO_CREATE_TABLES + " (Databricks "
+                  + "writes the table's v0). Required only when auto-creating an absent table.");
 
   public DeltaSinkConfig(Map<String, String> props) {
     super(CONFIG_DEF, props);
@@ -280,5 +297,13 @@ public final class DeltaSinkConfig extends AbstractConfig {
 
   public long flushIntervalMs() {
     return getLong(FLUSH_INTERVAL_MS);
+  }
+
+  public boolean autoCreateTables() {
+    return getBoolean(AUTO_CREATE_TABLES);
+  }
+
+  public String warehouseId() {
+    return getString(WAREHOUSE_ID);
   }
 }

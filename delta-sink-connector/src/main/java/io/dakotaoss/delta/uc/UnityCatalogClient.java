@@ -2,6 +2,7 @@ package io.dakotaoss.delta.uc;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.dakotaoss.delta.util.Redact;
 
 import java.io.IOException;
@@ -88,6 +89,36 @@ public final class UnityCatalogClient {
     return new TemporaryCredentials(body);
   }
 
+  /**
+   * Run a SQL statement on a SQL warehouse and block until it finishes. Used to auto-create a
+   * catalog-managed table via DDL (Databricks writes the table's v0; the connector then appends),
+   * which is why auto-create needs a warehouse. Throws if the statement does not reach SUCCEEDED.
+   */
+  public void executeStatement(String warehouseId, String sql)
+      throws IOException, InterruptedException {
+    ObjectNode body = MAPPER.createObjectNode();
+    body.put("warehouse_id", warehouseId);
+    body.put("statement", sql);
+    body.put("wait_timeout", "50s");
+    JsonNode resp =
+        send(
+            baseRequest(baseUrl + "/api/2.0/sql/statements")
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
+                .build());
+    String statementId = resp.path("statement_id").asText(null);
+    String state = resp.path("status").path("state").asText("");
+    for (int i = 0; i < 30 && ("PENDING".equals(state) || "RUNNING".equals(state)); i++) {
+      Thread.sleep(2000);
+      resp = send(baseRequest(baseUrl + "/api/2.0/sql/statements/" + statementId).GET().build());
+      state = resp.path("status").path("state").asText("");
+    }
+    if (!"SUCCEEDED".equals(state)) {
+      // status.error.message can echo back the statement; keep it terse and don't leak it.
+      throw new IOException("SQL statement did not succeed (state=" + state + ")");
+    }
+  }
+
   private HttpRequest.Builder baseRequest(String url) {
     return HttpRequest.newBuilder()
         .uri(URI.create(url))
@@ -100,10 +131,18 @@ public final class UnityCatalogClient {
     if (resp.statusCode() / 100 != 2) {
       // Never include the response body: the temporary-table-credentials endpoint returns the vended
       // SAS in it. Status + redacted URI is enough to diagnose without leaking secrets.
-      throw new IOException(
-          "Unity Catalog API " + resp.statusCode() + " for " + Redact.text(req.uri().toString()));
+      String msg = "Unity Catalog API " + resp.statusCode() + " for " + Redact.text(req.uri().toString());
+      // 404 on a tables GET is a normal "absent" signal the auto-create path acts on; make it distinct.
+      throw resp.statusCode() == 404 ? new NotFoundException(msg) : new IOException(msg);
     }
     return MAPPER.readTree(resp.body());
+  }
+
+  /** Thrown when a UC resource (e.g. a table) does not exist (HTTP 404). */
+  public static final class NotFoundException extends IOException {
+    public NotFoundException(String message) {
+      super(message);
+    }
   }
 
   private static String stripTrailingSlash(String s) {

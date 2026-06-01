@@ -26,8 +26,9 @@ Goals:
 - effectively-once delivery across task restarts.
 - tunable commit cadence (file size / row count / max latency) so an operator can trade throughput
   against latency and small-file count.
-- create the table from the Connect schema on first write when it is absent (filesystem path);
-  append to a pre-created table on the catalog-managed path.
+- create the table from the Connect schema on first write when it is absent: filesystem tables
+  directly, catalog-managed tables via a SQL warehouse (`auto.create.tables`, default on); or append to
+  a pre-created table.
 - a Delta history consistent with Spark-written tables (populated `operationMetrics` /
   `operationParameters` / `isBlindAppend`) so downstream tooling reads it the same way.
 
@@ -234,6 +235,8 @@ Config surface is `DeltaSinkConfig`. Defaults shown.
 | `flush.size` | int | 500 | rows buffered per partition before a commit; 0 disables this dial |
 | `flush.bytes` | long | 0 | approx buffered bytes before a commit, for target file size (e.g. 134217728 = 128 MiB); 0 disables |
 | `flush.interval.ms` | long | 5000 | max time to buffer a partition before committing |
+| `auto.create.tables` | boolean | true | create an absent catalog-managed table on first write, deriving schema + nullability from the record. Needs `databricks.warehouse.id` and `CREATE TABLE` on the schema. Set false to require pre-created tables |
+| `databricks.warehouse.id` | string | (empty) | SQL warehouse that runs the `CREATE TABLE` for `auto.create.tables` (Databricks initializes the catalog-managed table's v0; the connector then appends). Required only when auto-creating |
 
 **Three flush dials, whichever trips first.** `flush.size` and `flush.bytes` flush opportunistically
 inside `put` when a buffer fills. `flush.interval.ms` is enforced by a scheduler that flushes any

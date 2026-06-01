@@ -65,11 +65,16 @@ different destination, `main.cdc.orders_raw`. Every resolved name must be a vali
 `catalog.schema.table`. Routing requires the **External Access to UC Managed Delta Table** Beta and
 DBR 16.4+ (see [../README.md](../README.md#status)).
 
-## Bronze table (create once, per topic)
+## Bronze table
 
-The catalog-managed sink appends to a pre-created table — auto-creating the catalog-managed table on
-first write is planned but not yet implemented, so create it first. The schema must match the flattened
-value, with all columns nullable (Kernel enforces nullability):
+By default the connector **auto-creates** the catalog-managed table on first write
+(`auto.create.tables`, default `true`), deriving the schema (and nullability) from the first record. It
+runs the `CREATE TABLE` on `databricks.warehouse.id`, so set that and grant the principal `CREATE TABLE`
+on the schema. Catalog-managed tables can only be initialized by Databricks, which is why a warehouse is
+needed for auto-create (the connector then writes the data itself).
+
+To manage tables yourself instead, set `auto.create.tables=false` and pre-create each one — the schema
+must match the flattened value, columns nullable unless the source column is required:
 
 ```sql
 CREATE TABLE bronze.sales.customers (
@@ -87,8 +92,10 @@ CREATE TABLE bronze.sales.customers (
 - The Debezium SQL Server connector on the same worker.
 - SQL Server with CDC enabled on the captured tables (`sys.sp_cdc_enable_table`), and an agent that can
   read the CDC tables.
-- A Databricks workspace with the External Access to UC Managed Delta Table Beta enabled, DBR 16.4+, the
-  token principal granted `EXTERNAL USE SCHEMA` on the target schema, and the bronze tables created (above).
+- A Databricks workspace with the External Access to UC Managed Delta Table Beta enabled, DBR 16.4+, and
+  the token principal granted `EXTERNAL USE SCHEMA` on the target schema. For auto-create, also set
+  `databricks.warehouse.id` and grant the principal `CREATE TABLE` on the schema; otherwise pre-create
+  the bronze tables (above) and set `auto.create.tables=false`.
 - Secrets externalised via the worker's config provider. Both configs read
   `${file:/opt/secrets/*.properties:key}`; wire `FileConfigProvider` (or your provider) on the worker.
 

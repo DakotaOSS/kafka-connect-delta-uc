@@ -7,6 +7,7 @@ import io.dakotaoss.delta.schema.RecordConverter;
 import io.dakotaoss.delta.schema.RecordSizeEstimator;
 import io.dakotaoss.delta.schema.SchemaMapper;
 import io.dakotaoss.delta.uc.TableResolver;
+import io.dakotaoss.delta.uc.UcColumnMapper;
 import io.dakotaoss.delta.uc.UcTableResolver;
 import io.dakotaoss.delta.uc.UnityCatalogClient;
 import io.dakotaoss.delta.uc.UnityCatalogCommitter;
@@ -70,6 +71,11 @@ public final class DeltaSinkTask extends SinkTask {
   // oauth/entra modes) authenticates every UC call this task makes.
   private CredentialProvider credential;
   private TableResolver resolver;
+  // Prod-only (null under the test constructor): the UC client + typed resolver for auto-creating an
+  // absent catalog-managed table on first write. The auto-create path is guarded on uc != null.
+  private UnityCatalogClient uc;
+  private UcTableResolver ucResolver;
+  private boolean autoCreate;
   private EngineProvider engineProvider;
   private DeltaKernelWriter writer;
   private String connectorName;
@@ -191,10 +197,12 @@ public final class DeltaSinkTask extends SinkTask {
     // its own (before expiry); for pat it reads the config token per request. Either way the UC
     // clients just see a Supplier<String> that always yields a valid token.
     this.credential = Credentials.fromConfig(config);
-    UnityCatalogClient uc = new UnityCatalogClient(config.workspaceUrl(), credential);
-    this.resolver =
+    this.uc = new UnityCatalogClient(config.workspaceUrl(), credential);
+    this.ucResolver =
         new UcTableResolver(
             uc, config.tableNameFormat(), config.topicToTable(), config.partitionColumns());
+    this.resolver = ucResolver;
+    this.autoCreate = config.autoCreateTables();
     this.engineProvider = EngineProvider.hadoop();
     this.writer = new DeltaKernelWriter();
     this.maintenance = Executors.newSingleThreadExecutor();
@@ -320,6 +328,11 @@ public final class DeltaSinkTask extends SinkTask {
     }
 
     String appId = connectorName + ":" + tp.topic() + "-" + tp.partition();
+    // Create the catalog-managed table on first write if it's absent (auto.create.tables). Only on a
+    // cache miss, so steady-state flushes don't pay an extra getTable. refSchema gives the columns.
+    if (autoCreate && uc != null && !tableStates.containsKey(tp.topic())) {
+      ensureCatalogTable(tp.topic(), refSchema);
+    }
     TableState st = stateFor(tp.topic());
     try {
       StructType kernelSchema = SchemaMapper.toKernel(refSchema);
@@ -454,6 +467,41 @@ public final class DeltaSinkTask extends SinkTask {
       return new TableState(target, engine, committer, snapshot, clock.getAsLong());
     }
     return new TableState(target, engine, null, null, clock.getAsLong());
+  }
+
+  /**
+   * Create the topic's catalog-managed table if absent (auto.create.tables): register it in UC with a
+   * schema derived from {@code valueSchema} (columns nullable), then write its v0 schema commit so the
+   * normal append path takes over. v0 carries no data; the first batch is appended as v1 with its
+   * SetTransaction stamp, so a crash between create and offset-commit can't duplicate it. No-op if the
+   * table exists; a non-404 error is left for stateFor's resolve to surface (redacted).
+   */
+  private void ensureCatalogTable(String topic, org.apache.kafka.connect.data.Schema valueSchema) {
+    String fullName = ucResolver.nameFor(topic);
+    try {
+      uc.getTable(fullName);
+      return; // already exists
+    } catch (UnityCatalogClient.NotFoundException absent) {
+      // fall through to create
+    } catch (Exception e) {
+      return; // auth/network/etc.: let stateFor's resolve raise it with redaction
+    }
+    String warehouse = config.warehouseId();
+    if (warehouse == null || warehouse.isEmpty()) {
+      throw new ConnectException(
+          "auto-create needs " + DeltaSinkConfig.WAREHOUSE_ID + " set, or pre-create " + fullName);
+    }
+    try {
+      // DDL via a SQL warehouse: Databricks writes the table's v0 (an external engine cannot commit
+      // v0 -- UC's create protocol differs from its commit path), then the normal append writes v1.
+      String ddl =
+          "CREATE TABLE IF NOT EXISTS " + fullName + " (" + UcColumnMapper.ddlColumnDefs(valueSchema)
+              + ") TBLPROPERTIES ('delta.feature.catalogManaged'='supported')";
+      uc.executeStatement(warehouse, ddl);
+      LOG.info("Auto-created catalog-managed table {}", fullName);
+    } catch (Exception e) {
+      throw new ConnectException("auto-create failed for " + fullName + ": " + Redact.message(e));
+    }
   }
 
   @Override
