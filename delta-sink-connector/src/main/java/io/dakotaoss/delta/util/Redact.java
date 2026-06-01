@@ -34,8 +34,26 @@ public final class Redact {
     return s;
   }
 
-  /** Redacted {@code toString()} of a throwable, for safe logging. */
+  /**
+   * Redacted {@code toString()} of a throwable <b>and its cause chain</b>, for safe logging. Recursing
+   * matters because a redacted message is often re-thrown while the raw throwable is dropped: a SAS
+   * buried in a nested cause must not survive in the text we keep. Bounded depth; guards self-cause.
+   */
   public static String message(Throwable t) {
-    return t == null ? null : text(t.toString());
+    if (t == null) {
+      return null;
+    }
+    StringBuilder sb = new StringBuilder();
+    int depth = 0;
+    for (Throwable c = t; c != null && depth < 10; c = c.getCause(), depth++) {
+      if (sb.length() > 0) {
+        sb.append("; caused by: ");
+      }
+      sb.append(text(c.toString()));
+      if (c.getCause() == c) {
+        break;
+      }
+    }
+    return sb.toString();
   }
 }

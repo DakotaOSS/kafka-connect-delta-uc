@@ -1,6 +1,8 @@
 package io.dakotaoss.delta;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -36,6 +38,35 @@ class UcTableResolverTest {
     ex.sendResponseHeaders(200, b.length);
     try (OutputStream os = ex.getResponseBody()) {
       os.write(b);
+    }
+  }
+
+  @Test
+  void resolveFailureDropsRawCause() throws Exception {
+    // resolve()'s catch must not chain the raw throwable: a future ABFS exception there could embed a
+    // SAS, and Connect logs the whole cause chain. Keep only the redacted message, no cause.
+    HttpServer s = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    s.createContext(
+        "/api/2.1/unity-catalog/tables/",
+        ex -> {
+          byte[] b = "{\"error_code\":\"INTERNAL\"}".getBytes(StandardCharsets.UTF_8);
+          ex.sendResponseHeaders(500, b.length);
+          try (OutputStream os = ex.getResponseBody()) {
+            os.write(b);
+          }
+        });
+    s.start();
+    try {
+      String base = "http://127.0.0.1:" + s.getAddress().getPort();
+      UcTableResolver resolver =
+          new UcTableResolver(
+              new UnityCatalogClient(base, "tok"), "main.ingestion.${topic}", Collections.emptyList());
+      ConnectException ex = assertThrows(ConnectException.class, () -> resolver.resolve("orders"));
+      assertNull(ex.getCause(), "raw cause must be dropped so it can't be logged unredacted");
+      assertTrue(ex.getMessage().contains("Failed to resolve UC table main.ingestion.orders"));
+      assertFalse(ex.getMessage().contains("sig="), "any SAS in the cause must be redacted out");
+    } finally {
+      s.stop(0);
     }
   }
 
