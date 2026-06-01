@@ -73,4 +73,49 @@ class VendedSasStoreTest {
     assertArrayEquals(new char[first.length], first, "previous SAS must be zeroed on re-vend");
     assertEquals("sigNew", store.sasFor("h", "cont", "dir/x"));
   }
+
+  @Test
+  void distinctHostsSharingAShortAccountNameDoNotCollide() {
+    // same account reached via dfs and blob endpoints: full-host keying must keep them separate so a
+    // dfs request can't be served the blob-scoped SAS (endpoint-mismatched -> 403).
+    VendedSasStore store = new VendedSasStore();
+    store.put("acct.dfs.core.windows.net", "cont", "dir", "sigDfs".toCharArray());
+    store.put("acct.blob.core.windows.net", "cont", "dir", "sigBlob".toCharArray());
+    assertEquals("sigDfs", store.sasFor("acct.dfs.core.windows.net", "cont", "dir/x"));
+    assertEquals("sigBlob", store.sasFor("acct.blob.core.windows.net", "cont", "dir/x"));
+  }
+
+  @Test
+  void shortAccountFallbackIsAmbiguousWhenTwoHostsShareTheName() {
+    // ABFS may call getSASToken with the bare account; if two registered hosts share that short name
+    // the fallback can't pick one safely, so it declines rather than risk an endpoint mismatch.
+    VendedSasStore store = new VendedSasStore();
+    store.put("acct.dfs.core.windows.net", "cont", "dir", "sigDfs".toCharArray());
+    store.put("acct.blob.core.windows.net", "cont", "dir", "sigBlob".toCharArray());
+    assertNull(store.sasFor("acct", "cont", "dir/x"));
+  }
+
+  @Test
+  void boundsPerHostEntriesByEvictingTheOldestAndZeroingIt() {
+    VendedSasStore store = new VendedSasStore(2);
+    char[] oldest = "sigA".toCharArray();
+    store.put("h", "cont", "dirA", oldest);
+    store.put("h", "cont", "dirB", "sigB".toCharArray());
+    store.put("h", "cont", "dirC", "sigC".toCharArray()); // exceeds cap -> evicts dirA
+    assertArrayEquals(new char[oldest.length], oldest, "evicted SAS must be zeroed");
+    assertNull(store.sasFor("h", "cont", "dirA/x"), "evicted entry is gone");
+    assertEquals("sigB", store.sasFor("h", "cont", "dirB/x"));
+    assertEquals("sigC", store.sasFor("h", "cont", "dirC/x"));
+  }
+
+  @Test
+  void rerendingAnExistingPathDoesNotCountAgainstTheBound() {
+    // steady-state re-vend of the same paths must not trigger eviction.
+    VendedSasStore store = new VendedSasStore(2);
+    store.put("h", "cont", "dirA", "a1".toCharArray());
+    store.put("h", "cont", "dirB", "b1".toCharArray());
+    store.put("h", "cont", "dirA", "a2".toCharArray()); // replace, not a new entry
+    assertEquals("a2", store.sasFor("h", "cont", "dirA/x"));
+    assertEquals("b1", store.sasFor("h", "cont", "dirB/x"));
+  }
 }
