@@ -248,6 +248,19 @@
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
         <version>0.8.12</version>
+        <configuration>
+          <!-- Live* hits real Databricks and auto-skips offline; Benchmark is a perf harness, not a
+               correctness test. Neither runs in CI, so their target classes would always read as
+               0%-covered and drag the bundle down — exclude them from the floor. *Test/*Sampler are
+               test-only support; the verify-path reader isn't exercised by the offline suite. -->
+          <excludes>
+            <exclude>io/dakotaoss/delta/verify/**</exclude>
+            <exclude>**/Live*</exclude>
+            <exclude>**/*Benchmark*</exclude>
+            <exclude>**/*Test*</exclude>
+            <exclude>**/*Sampler*</exclude>
+          </excludes>
+        </configuration>
         <executions>
           <execution>
             <id>prepare-agent</id>
@@ -257,6 +270,28 @@
             <id>report</id>
             <phase>test</phase>
             <goals><goal>report</goal></goals>
+          </execution>
+          <!-- Gate regressions: fail verify if line coverage drops below the floor. Measured ~76.5%
+               line on the gated bundle (run mvn verify in Docker, per CLAUDE.md); floor set a few
+               points under that so normal churn ratchets rather than blocks. Raise as coverage grows. -->
+          <execution>
+            <id>check</id>
+            <phase>verify</phase>
+            <goals><goal>check</goal></goals>
+            <configuration>
+              <rules>
+                <rule>
+                  <element>BUNDLE</element>
+                  <limits>
+                    <limit>
+                      <counter>LINE</counter>
+                      <value>COVEREDRATIO</value>
+                      <minimum>0.70</minimum>
+                    </limit>
+                  </limits>
+                </rule>
+              </rules>
+            </configuration>
           </execution>
         </executions>
       </plugin>
