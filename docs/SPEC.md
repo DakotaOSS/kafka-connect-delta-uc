@@ -426,9 +426,12 @@ path. Delta ignores uncommitted files; `VACUUM` removes them.
    Expect API churn; the version is pinned and upgrades gate behind the test suite. The committer also
    crosses Kernel **internal** packages (`io.delta.kernel.internal.actions.*`,
    `…internal.files.*`) which are semi-public and may shift.
-3. **Token lifetime.** ~1 h vended/AAD tokens; refreshed proactively before expiry (re-resolve at
-   `REFRESH_MS` ~40 min) with the reactive drop-on-failure path as a backstop, and a per-request
-   `Supplier<String>` bearer token that picks up a re-minted token.
+3. **Token lifetime (mitigated).** The vended SAS (~1 h) is re-resolved proactively at `REFRESH_MS`
+   (~40 min), with a reactive drop-on-failure backstop. The bearer token comes from a
+   `CredentialProvider` (R4a): `oauth-m2m`/`azure-entra` mint and refresh it proactively at ~80% of
+   lifetime, and `pat` is a long-lived token — so a token does not expire unattended in steady state.
+   Residual: a 401 from a genuinely-bad token (revocation / clock skew) on the commit path, where the
+   fail-fast backstop is tracked in #45.
 4. **Delta vs Iceberg managed tables.** Managed-Iceberg external write is further along than managed
    Delta; the format decision sits with the UC team.
 

@@ -59,10 +59,10 @@ public final class DeltaSinkTask extends SinkTask {
   static final String VERSION = "0.1.0";
   private static final Logger LOG = LoggerFactory.getLogger(DeltaSinkTask.class);
 
-  // Hard ceiling on rows buffered across all partitions; past it we apply backpressure (H6) so a
+  // Hard ceiling on rows buffered across all partitions; past it we apply backpressure so a
   // stalled flush (e.g. UC outage) cannot grow the heap without bound.
   private static final int MAX_BUFFERED_RECORDS = 1_000_000;
-  // Re-resolve a cached catalog-managed table before its vended SAS (~1h TTL) can expire (H5).
+  // Re-resolve a cached catalog-managed table before its vended SAS (~1h TTL) can expire.
   private static final long REFRESH_MS = 40 * 60 * 1000;
 
   private DeltaSinkConfig config;
@@ -107,7 +107,7 @@ public final class DeltaSinkTask extends SinkTask {
     final Engine engine;
     final UnityCatalogCommitter committer; // null for filesystem tables
     Snapshot snapshot; // null for filesystem; advanced per commit for catalog-managed
-    final long resolvedAtMs; // clock reading at resolve; used to expire vended SAS before TTL (H5)
+    final long resolvedAtMs; // clock reading at resolve; used to expire vended SAS before TTL
 
     TableState(
         TableTarget target,
@@ -217,7 +217,7 @@ public final class DeltaSinkTask extends SinkTask {
   public void put(java.util.Collection<SinkRecord> records) {
     synchronized (lock) {
       // backpressure: refuse to grow the heap past the ceiling. RetriableException makes Connect
-      // pause and re-deliver this same batch once flushes drain the buffers (H6).
+      // pause and re-deliver this same batch once flushes drain the buffers.
       int buffered = 0;
       for (List<SinkRecord> b : buffers.values()) {
         buffered += b.size();
@@ -325,7 +325,9 @@ public final class DeltaSinkTask extends SinkTask {
       StructType kernelSchema = SchemaMapper.toKernel(refSchema);
       FilteredColumnarBatch data = RecordConverter.toBatch(kernelSchema, refSchema, good);
       if (st.committer != null) {
-        // catalog-managed: reuse snapshot, run backfill/checkpoint async
+        // Catalog-managed: reuse the in-memory snapshot, run backfill/checkpoint async. Invariant:
+        // st.snapshot is read and advanced only here, on the flush/commit thread under lock; the async
+        // maintenance task captures the immutable commit result + engine and never touches st.snapshot.
         TransactionCommitResult result =
             writer.appendToSnapshot(st.engine, st.snapshot, data, appId, lastOffset);
         if (result != null) {
@@ -419,7 +421,7 @@ public final class DeltaSinkTask extends SinkTask {
     TableState cached = tableStates.get(topic);
     if (cached != null) {
       // catalog-managed state caches a vended SAS; re-resolve before its ~1h TTL so we re-vend
-      // creds and rebuild engine/committer/snapshot rather than commit with an expiring token (H5).
+      // creds and rebuild engine/committer/snapshot rather than commit with an expiring token.
       boolean stale =
           cached.committer != null && clock.getAsLong() - cached.resolvedAtMs >= REFRESH_MS;
       if (!stale) {
@@ -456,22 +458,32 @@ public final class DeltaSinkTask extends SinkTask {
 
   @Override
   public void stop() {
+    ScheduledExecutorService sched;
+    ExecutorService maint;
     synchronized (lock) {
-      if (flushScheduler != null) {
-        flushScheduler.shutdownNow();
-      }
-      if (maintenance != null) {
-        maintenance.shutdown();
-        try {
-          maintenance.awaitTermination(30, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-        }
-      }
+      sched = flushScheduler;
+      maint = maintenance;
+      flushScheduler = null;
+      maintenance = null;
       buffers.clear();
       bufferStartMs.clear();
       bufferBytes.clear();
       tableStates.clear();
+    }
+    // Drain the executors OUTSIDE the lock: awaitTermination can block up to 30s while async
+    // maintenance finishes, and put()/the interval flush also take the lock -- holding it here would
+    // freeze the poller and risk a Connect stop-timeout. flush() and stop() still serialize on the
+    // lock, so no flush runs concurrently with the field nulling above.
+    if (sched != null) {
+      sched.shutdownNow();
+    }
+    if (maint != null) {
+      maint.shutdown();
+      try {
+        maint.awaitTermination(30, TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
     }
   }
 }
