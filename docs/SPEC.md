@@ -430,8 +430,9 @@ path. Delta ignores uncommitted files; `VACUUM` removes them.
    (~40 min), with a reactive drop-on-failure backstop. The bearer token comes from a
    `CredentialProvider` (R4a): `oauth-m2m`/`azure-entra` mint and refresh it proactively at ~80% of
    lifetime, and `pat` is a long-lived token — so a token does not expire unattended in steady state.
-   Residual: a 401 from a genuinely-bad token (revocation / clock skew) on the commit path, where the
-   fail-fast backstop is tracked in #45.
+   A 401 from a genuinely-bad token (revocation / clock skew) on the commit path is forced
+   non-retryable in the committer (`isAuthFailure`), so it fails fast and the next flush re-resolves
+   with a fresh token rather than storming.
 4. **Delta vs Iceberg managed tables.** Managed-Iceberg external write is further along than managed
    Delta; the format decision sits with the UC team.
 
