@@ -79,13 +79,14 @@ class LiveManagedUcWriteTest {
         new UnityCatalogCommitter(host, token, info.tableId, info.storageLocation, conf);
     UnityCatalogCommitter.CatalogState catalog = committer.catalogState();
 
-    DeltaKernelWriter.Result r =
-        new DeltaKernelWriter()
-            .appendCatalogManaged(
-                engine, target.tablePath(), fullName, "live-smoke", now, batch, committer,
-                catalog.commits, catalog.maxVersion);
+    DeltaKernelWriter w = new DeltaKernelWriter();
+    io.delta.kernel.Snapshot snapshot =
+        w.loadCatalogSnapshot(engine, target.tablePath(), committer, catalog.commits, catalog.maxVersion);
+    io.delta.kernel.TransactionCommitResult result =
+        w.appendToSnapshot(engine, snapshot, batch, "live-smoke", now);
+    w.maintain(engine, result);
 
-    assertTrue(r.version >= 0, "commit should produce a table version");
-    System.out.println("[LIVE] committed to " + fullName + " at version " + r.version);
+    assertTrue(result != null && result.getVersion() >= 0, "commit should produce a table version");
+    System.out.println("[LIVE] committed to " + fullName + " at version " + result.getVersion());
   }
 }
