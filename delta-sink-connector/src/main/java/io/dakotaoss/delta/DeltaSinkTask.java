@@ -89,20 +89,37 @@ public final class DeltaSinkTask extends SinkTask {
   // Connect's DLQ hook; null when the test constructor is used or no reporter is configured.
   private ErrantRecordReporter reporter;
 
+  // Test seams. Defaults match prod; tests inject to drive the otherwise only-in-prod backpressure,
+  // ~40min TTL re-resolve, and async-maintenance failure paths without 1M rows or a live UC. The
+  // class is final, so these are injection points rather than overridable methods.
+  private int maxBufferedRecords = MAX_BUFFERED_RECORDS;
+  private java.util.function.LongSupplier clock = System::currentTimeMillis;
+  // builds a fresh (uncached) write state for a topic; the live impl resolves + opens UC, a test can
+  // supply a catalog-managed state without a network round-trip.
+  private java.util.function.Function<String, TableState> stateBuilder = this::buildState;
+  // redacted async-maintenance failure sink; the redaction happens before the text reaches here.
+  private java.util.function.Consumer<String> asyncMaintenanceErrorSink =
+      msg -> LOG.warn("Async maintenance failed: {}", msg);
+
   /** Per-table write state. For catalog-managed tables the snapshot is reused across commits. */
-  private static final class TableState {
+  static final class TableState {
     final TableTarget target;
     final Engine engine;
     final UnityCatalogCommitter committer; // null for filesystem tables
     Snapshot snapshot; // null for filesystem; advanced per commit for catalog-managed
-    final long resolvedAtMs; // wall-clock at resolve; used to expire vended SAS before TTL (H5)
+    final long resolvedAtMs; // clock reading at resolve; used to expire vended SAS before TTL (H5)
 
-    TableState(TableTarget target, Engine engine, UnityCatalogCommitter committer, Snapshot snapshot) {
+    TableState(
+        TableTarget target,
+        Engine engine,
+        UnityCatalogCommitter committer,
+        Snapshot snapshot,
+        long resolvedAtMs) {
       this.target = target;
       this.engine = engine;
       this.committer = committer;
       this.snapshot = snapshot;
-      this.resolvedAtMs = System.currentTimeMillis();
+      this.resolvedAtMs = resolvedAtMs;
     }
   }
 
@@ -131,6 +148,31 @@ public final class DeltaSinkTask extends SinkTask {
   /** Test seam: supply the DLQ reporter that {@code start()} would otherwise pull from the context. */
   void injectReporter(ErrantRecordReporter reporter) {
     this.reporter = reporter;
+  }
+
+  /** Test seam: shrink the backpressure ceiling so the cap is reachable without millions of rows. */
+  void setMaxBufferedRecordsForTest(int cap) {
+    this.maxBufferedRecords = cap;
+  }
+
+  /** Test seam: drive the SAS-TTL re-resolve clock instead of waiting ~40 min of wall time. */
+  void setClockForTest(java.util.function.LongSupplier clock) {
+    this.clock = clock;
+  }
+
+  /** Test seam: capture the redacted text the async-maintenance failure path would otherwise log. */
+  void setAsyncMaintenanceErrorSinkForTest(java.util.function.Consumer<String> sink) {
+    this.asyncMaintenanceErrorSink = sink;
+  }
+
+  /** Test seam: supply a write-state builder so a catalog-managed flush needs no live UC. */
+  void setStateBuilderForTest(java.util.function.Function<String, TableState> builder) {
+    this.stateBuilder = builder;
+  }
+
+  /** Test seam: clock reading used to stamp a {@link TableState} built outside the live resolver. */
+  long clockForTest() {
+    return clock.getAsLong();
   }
 
   @Override
@@ -180,12 +222,12 @@ public final class DeltaSinkTask extends SinkTask {
       for (List<SinkRecord> b : buffers.values()) {
         buffered += b.size();
       }
-      if (buffered + records.size() > MAX_BUFFERED_RECORDS) {
+      if (buffered + records.size() > maxBufferedRecords) {
         throw new RetriableException(
             "buffered records " + buffered + " + " + records.size()
-                + " would exceed cap " + MAX_BUFFERED_RECORDS + "; applying backpressure");
+                + " would exceed cap " + maxBufferedRecords + "; applying backpressure");
       }
-      long now = System.currentTimeMillis();
+      long now = clock.getAsLong();
       for (SinkRecord record : records) {
         TopicPartition tp = new TopicPartition(record.topic(), record.kafkaPartition());
         buffers.computeIfAbsent(tp, k -> new ArrayList<>()).add(record);
@@ -294,7 +336,9 @@ public final class DeltaSinkTask extends SinkTask {
                 try {
                   writer.maintain(fst.engine, result);
                 } catch (Exception e) {
-                  LOG.warn("Async maintenance for {} failed: {}", tp.topic(), Redact.message(e));
+                  // swallow: UC already holds the ratified commit, so a failed publish/checkpoint is
+                  // non-fatal. Redact first: the cause can embed a vended SAS.
+                  asyncMaintenanceErrorSink.accept(tp.topic() + ": " + Redact.message(e));
                 }
               });
         }
@@ -371,16 +415,21 @@ public final class DeltaSinkTask extends SinkTask {
       // catalog-managed state caches a vended SAS; re-resolve before its ~1h TTL so we re-vend
       // creds and rebuild engine/committer/snapshot rather than commit with an expiring token (H5).
       boolean stale =
-          cached.committer != null
-              && System.currentTimeMillis() - cached.resolvedAtMs >= REFRESH_MS;
+          cached.committer != null && clock.getAsLong() - cached.resolvedAtMs >= REFRESH_MS;
       if (!stale) {
         return cached;
       }
       tableStates.remove(topic);
     }
+    TableState st = stateBuilder.apply(topic);
+    tableStates.put(topic, st);
+    return st;
+  }
+
+  /** Resolve a topic to a fresh write state (no cache); the live default for {@code stateBuilder}. */
+  private TableState buildState(String topic) {
     TableTarget target = resolver.resolve(topic);
     Engine engine = engineProvider.engineFor(target);
-    TableState st;
     if (target.tableId() != null) {
       Configuration conf = new Configuration();
       target.hadoopConfig().forEach(conf::set);
@@ -394,12 +443,9 @@ public final class DeltaSinkTask extends SinkTask {
       UnityCatalogCommitter.CatalogState cs = committer.catalogState();
       Snapshot snapshot =
           writer.loadCatalogSnapshot(engine, target.tablePath(), committer, cs.commits, cs.maxVersion);
-      st = new TableState(target, engine, committer, snapshot);
-    } else {
-      st = new TableState(target, engine, null, null);
+      return new TableState(target, engine, committer, snapshot, clock.getAsLong());
     }
-    tableStates.put(topic, st);
-    return st;
+    return new TableState(target, engine, null, null, clock.getAsLong());
   }
 
   @Override
