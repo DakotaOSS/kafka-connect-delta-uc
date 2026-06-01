@@ -2,6 +2,7 @@ package io.dakotaoss.delta.uc;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
@@ -25,21 +26,37 @@ import java.util.Map;
  */
 public final class VendedSasStore {
 
+  // a moved storage location or a churning topic/path set could otherwise grow byHost's inner maps
+  // without bound (zeroed arrays, no secret leak — just heap); cap each host and evict the LRU entry.
+  private static final int DEFAULT_MAX_ENTRIES_PER_HOST = 1024;
+
   private static final VendedSasStore INSTANCE = new VendedSasStore();
 
   public static VendedSasStore instance() {
     return INSTANCE;
   }
 
-  // host (lower-cased) -> ( "container/dir" -> SAS char[] )
+  private final int maxEntriesPerHost;
+
+  // full host (lower-cased) -> ( "container/dir" -> SAS char[] ), inner map in LRU access order
   private final Map<String, Map<String, char[]>> byHost = new HashMap<>();
+
+  public VendedSasStore() {
+    this(DEFAULT_MAX_ENTRIES_PER_HOST);
+  }
+
+  // visible for tests that drive eviction with a small cap
+  public VendedSasStore(int maxEntriesPerHost) {
+    this.maxEntriesPerHost = maxEntriesPerHost;
+  }
 
   /**
    * Register (or replace) a table's SAS, scoped to {@code container/dirPath}. Takes ownership of
-   * {@code sas}; the previous token for the same path is zeroed.
+   * {@code sas}; the previous token for the same path is zeroed. Evicting the LRU entry once the host
+   * exceeds its entry cap also zeroes the dropped token.
    */
   public synchronized void put(String host, String container, String dirPath, char[] sas) {
-    Map<String, char[]> m = byHost.computeIfAbsent(accountKey(host), h -> new HashMap<>());
+    Map<String, char[]> m = byHost.computeIfAbsent(hostKey(host), h -> newBoundedMap());
     char[] prev = m.put(path(container, dirPath), sas);
     if (prev != null && prev != sas) {
       Arrays.fill(prev, '\0');
@@ -52,7 +69,7 @@ public final class VendedSasStore {
    * none is registered.
    */
   public synchronized String sasFor(String host, String container, String path) {
-    Map<String, char[]> m = byHost.get(accountKey(host));
+    Map<String, char[]> m = mapFor(host);
     if (m == null) {
       return null;
     }
@@ -67,6 +84,54 @@ public final class VendedSasStore {
       }
     }
     return best == null ? null : new String(m.get(best));
+  }
+
+  private Map<String, char[]> newBoundedMap() {
+    return new LinkedHashMap<>(16, 0.75f, true) {
+      @Override
+      protected boolean removeEldestEntry(Map.Entry<String, char[]> eldest) {
+        if (size() <= maxEntriesPerHost) {
+          return false;
+        }
+        Arrays.fill(eldest.getValue(), '\0');
+        return true;
+      }
+    };
+  }
+
+  // Resolve the inner map for a lookup host. Registration always stores the full host; ABFS, however,
+  // may call getSASToken with either the full host or the bare account name. Prefer an exact full-host
+  // match; only when the lookup is a bare account (no dot) fall back to a registered host whose short
+  // name matches — and only if exactly one does, so dfs/blob/private-link hosts that share a short name
+  // can't be served each other's endpoint-mismatched SAS.
+  private Map<String, char[]> mapFor(String host) {
+    if (host == null) {
+      return null;
+    }
+    String h = host.toLowerCase(Locale.ROOT);
+    Map<String, char[]> exact = byHost.get(h);
+    if (exact != null || h.indexOf('.') >= 0) {
+      return exact;
+    }
+    Map<String, char[]> hit = null;
+    for (Map.Entry<String, Map<String, char[]>> e : byHost.entrySet()) {
+      if (shortName(e.getKey()).equals(h)) {
+        if (hit != null) {
+          return null; // ambiguous short name -> decline rather than risk a mismatch
+        }
+        hit = e.getValue();
+      }
+    }
+    return hit;
+  }
+
+  private static String hostKey(String host) {
+    return host == null ? null : host.toLowerCase(Locale.ROOT);
+  }
+
+  private static String shortName(String host) {
+    int dot = host.indexOf('.');
+    return dot < 0 ? host : host.substring(0, dot);
   }
 
   private static String path(String container, String p) {
@@ -86,17 +151,5 @@ public final class VendedSasStore {
       b--;
     }
     return s.substring(a, b);
-  }
-
-  // The storage account, lower-cased and reduced to the bare account name. ABFS passes getSASToken the
-  // short account ("acct") while the table URI carries the full host ("acct.dfs.core.windows.net");
-  // key on the part before the first dot so registration and lookup agree.
-  private static String accountKey(String host) {
-    if (host == null) {
-      return null;
-    }
-    String h = host.toLowerCase(Locale.ROOT);
-    int dot = h.indexOf('.');
-    return dot < 0 ? h : h.substring(0, dot);
   }
 }
