@@ -80,6 +80,11 @@ public final class UcTableResolver implements TableResolver {
     }
   }
 
+  /** The full {@code catalog.schema.table} a topic routes to, without any UC call (for auto-create). */
+  public String nameFor(String topic) {
+    return resolveName(tableNameFormat, topicToTable, topic);
+  }
+
   /**
    * Register the vended SAS in {@link VendedSasStore} and return the ABFS Hadoop config (keyed on the
    * storage-account host) that points ABFS at {@link VendedSasTokenProvider}. The SAS itself is kept
