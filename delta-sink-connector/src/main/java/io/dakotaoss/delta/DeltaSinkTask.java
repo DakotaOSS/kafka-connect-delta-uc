@@ -19,11 +19,16 @@ import io.delta.kernel.TransactionCommitResult;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.types.StructType;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.conf.Configuration;
@@ -87,11 +92,17 @@ public final class DeltaSinkTask extends SinkTask {
   // per-partition rows/bytes/start bookkeeping; all access is under lock (built in start()/test ctor
   // once flush.bytes is known, so it can skip byte estimation when the dial is off).
   private RecordBuffer buffer;
-  private final Map<TopicPartition, Long> committed = new HashMap<>();
-  private final Map<String, TableState> tableStates = new HashMap<>();
+  // Concurrent: with flush.concurrency>1 these are touched by per-table commit tasks running off the
+  // task thread. committed is written per-partition, tableStates per-table -- disjoint keys per task.
+  private final Map<TopicPartition, Long> committed = new ConcurrentHashMap<>();
+  private final Map<String, TableState> tableStates = new ConcurrentHashMap<>();
 
   private ExecutorService maintenance;
   private ScheduledExecutorService flushScheduler;
+  // Commit independent tables in parallel (1 = serial, today's behavior). Bounds in-flight commits;
+  // one task per table so same-table commits stay serialized. Null when flushConcurrency == 1.
+  private int flushConcurrency = 1;
+  private ExecutorService flushExecutor;
   // Connect's DLQ hook; null when the test constructor is used or no reporter is configured.
   private ErrantRecordReporter reporter;
 
@@ -150,6 +161,10 @@ public final class DeltaSinkTask extends SinkTask {
     this.flushIntervalMs = config.flushIntervalMs();
     this.buffer = new RecordBuffer(flushBytes > 0);
     this.evolution = SchemaEvolution.Policy.from(config.schemaEvolution());
+    this.flushConcurrency = config.flushConcurrency();
+    if (flushConcurrency > 1) {
+      this.flushExecutor = Executors.newFixedThreadPool(flushConcurrency);
+    }
     this.maintenance = Executors.newSingleThreadExecutor();
   }
 
@@ -210,6 +225,10 @@ public final class DeltaSinkTask extends SinkTask {
     this.engineProvider = EngineProvider.hadoop();
     this.writer = new DeltaKernelWriter();
     this.maintenance = Executors.newSingleThreadExecutor();
+    this.flushConcurrency = config.flushConcurrency();
+    if (flushConcurrency > 1) {
+      this.flushExecutor = Executors.newFixedThreadPool(flushConcurrency);
+    }
     // capture the errant-record reporter once; context (and the reporter) may be absent
     this.reporter = context == null ? null : context.errantRecordReporter();
     if (flushIntervalMs > 0) {
@@ -253,9 +272,7 @@ public final class DeltaSinkTask extends SinkTask {
   private void flushOnInterval() {
     synchronized (lock) {
       try {
-        for (TopicPartition tp : buffer.partitions()) {
-          flush(tp);
-        }
+        flushDirty();
       } catch (Exception e) {
         // redact: the cause can embed a vended SAS
         LOG.error("Scheduled flush failed: {}", Redact.message(e));
@@ -263,13 +280,67 @@ public final class DeltaSinkTask extends SinkTask {
     }
   }
 
+  /**
+   * Flush every dirty partition. Serially (flush.concurrency==1, today's behavior) or, when >1 and
+   * more than one table is dirty, with one commit task per table on the bounded {@code flushExecutor} --
+   * different tables commit in parallel (overlapping WAN round-trips) while a table's own partitions
+   * stay serial inside its task (so its reused snapshot is touched by one thread, preserving order).
+   * Caller holds {@code lock} for the whole call incl. the await, so no other flush runs meanwhile and
+   * the only concurrent state is the per-table maps (committed/tableStates) and the synchronized buffer.
+   */
+  private void flushDirty() {
+    List<TopicPartition> parts = buffer.partitions();
+    Map<String, List<TopicPartition>> byTable = new LinkedHashMap<>();
+    for (TopicPartition tp : parts) {
+      byTable.computeIfAbsent(tp.topic(), k -> new ArrayList<>()).add(tp);
+    }
+    if (flushExecutor == null || byTable.size() <= 1) {
+      for (TopicPartition tp : parts) {
+        flush(tp);
+      }
+      return;
+    }
+    List<Future<?>> futures = new ArrayList<>();
+    for (List<TopicPartition> group : byTable.values()) {
+      futures.add(
+          flushExecutor.submit(
+              () -> {
+                for (TopicPartition tp : group) {
+                  flush(tp); // same-table partitions serial -> snapshot touched by one thread
+                }
+                return null;
+              }));
+    }
+    RuntimeException failure = null;
+    for (Future<?> f : futures) {
+      try {
+        f.get();
+      } catch (ExecutionException ee) {
+        // one table's commit failed (already DLQ-handled if a reporter was set, else fatal). Let the
+        // other tables finish, then surface the first failure to fail the task -- its offset never
+        // advanced, so Connect redelivers it; tables that succeeded keep their advanced offsets.
+        RuntimeException re =
+            ee.getCause() instanceof RuntimeException
+                ? (RuntimeException) ee.getCause()
+                : new ConnectException(Redact.message(ee.getCause()));
+        if (failure == null) {
+          failure = re;
+        }
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        throw new ConnectException("flush interrupted", ie);
+      }
+    }
+    if (failure != null) {
+      throw failure;
+    }
+  }
+
   @Override
   public Map<TopicPartition, OffsetAndMetadata> preCommit(
       Map<TopicPartition, OffsetAndMetadata> currentOffsets) {
     synchronized (lock) {
-      for (TopicPartition tp : buffer.partitions()) {
-        flush(tp);
-      }
+      flushDirty();
       Map<TopicPartition, OffsetAndMetadata> safe = new HashMap<>();
       for (Map.Entry<TopicPartition, Long> e : committed.entrySet()) {
         safe.put(e.getKey(), new OffsetAndMetadata(e.getValue()));
@@ -541,11 +612,14 @@ public final class DeltaSinkTask extends SinkTask {
   public void stop() {
     ScheduledExecutorService sched;
     ExecutorService maint;
+    ExecutorService flushEx;
     synchronized (lock) {
       sched = flushScheduler;
       maint = maintenance;
+      flushEx = flushExecutor;
       flushScheduler = null;
       maintenance = null;
+      flushExecutor = null;
       if (buffer != null) {
         buffer.clearAll();
       }
@@ -557,6 +631,10 @@ public final class DeltaSinkTask extends SinkTask {
     // lock, so no flush runs concurrently with the field nulling above.
     if (sched != null) {
       sched.shutdownNow();
+    }
+    if (flushEx != null) {
+      // a flushDirty in flight holds the lock, so by here no commit task is running; just release it.
+      flushEx.shutdownNow();
     }
     if (maint != null) {
       maint.shutdown();

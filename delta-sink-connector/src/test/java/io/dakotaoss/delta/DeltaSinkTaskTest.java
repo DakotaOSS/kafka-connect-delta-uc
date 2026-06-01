@@ -161,6 +161,72 @@ class DeltaSinkTaskTest {
     task.stop();
   }
 
+  // ---- flush.concurrency (#46): commit independent tables in parallel ----------------------------
+
+  private DeltaSinkTask concurrentTask(Path tmp, int concurrency, DeltaKernelWriter writer) {
+    Map<String, String> props = new HashMap<>();
+    props.put("name", "delta-sink-test");
+    props.put(DeltaSinkConfig.WORKSPACE_URL, "https://example.invalid");
+    props.put(DeltaSinkConfig.TOKEN, "unused");
+    props.put(DeltaSinkConfig.FLUSH_SIZE, "1000"); // flush at preCommit, not opportunistically in put
+    props.put(DeltaSinkConfig.FLUSH_CONCURRENCY, Integer.toString(concurrency));
+    return new DeltaSinkTask(
+        new DeltaSinkConfig(props), new LocalTableResolver(tmp), EngineProvider.hadoop(), writer,
+        "delta-sink-test");
+  }
+
+  // fails the append for one topic (by its appId "<conn>:<topic>-<part>"), commits the rest normally.
+  private static final class TopicFailingWriter extends DeltaKernelWriter {
+    private final String failTopic;
+
+    TopicFailingWriter(String failTopic) {
+      this.failTopic = failTopic;
+    }
+
+    @Override
+    public Result append(
+        Engine engine, String tablePath, String tableName, StructType schema,
+        List<String> partitionColumns, String appId, long version, FilteredColumnarBatch batch) {
+      if (appId != null && appId.contains(":" + failTopic + "-")) {
+        throw new RuntimeException("boom for " + failTopic);
+      }
+      return super.append(engine, tablePath, tableName, schema, partitionColumns, appId, version, batch);
+    }
+  }
+
+  @Test
+  void concurrentFlushCommitsAllTablesAndAdvancesOffsets(@TempDir Path tmp) throws Exception {
+    DeltaSinkTask task = concurrentTask(tmp, 3, new DeltaKernelWriter());
+    List<SinkRecord> recs = new ArrayList<>();
+    for (String t : List.of("ta", "tb", "tc")) {
+      recs.add(rec(t, 0, 0L, 1, "a", 1.0));
+      recs.add(rec(t, 0, 1L, 2, "b", 2.0));
+    }
+    task.put(recs);
+    Map<TopicPartition, OffsetAndMetadata> safe = task.preCommit(Collections.emptyMap());
+    for (String t : List.of("ta", "tb", "tc")) {
+      assertEquals(2, count(tmp, t), "all rows committed for " + t);
+      assertEquals(2L, safe.get(new TopicPartition(t, 0)).offset(), "offset advanced for " + t);
+    }
+    task.stop();
+  }
+
+  @Test
+  void concurrentFlushSurfacesOneTableFailureWhileOthersCommit(@TempDir Path tmp) throws Exception {
+    DeltaSinkTask task = concurrentTask(tmp, 3, new TopicFailingWriter("tb")); // no reporter -> fatal
+    List<SinkRecord> recs = new ArrayList<>();
+    for (String t : List.of("ta", "tb", "tc")) {
+      recs.add(rec(t, 0, 0L, 1, "a", 1.0));
+    }
+    task.put(recs);
+    // tb's commit throws -> preCommit fails the task; the independent tables still committed.
+    assertThrows(ConnectException.class, () -> task.preCommit(Collections.emptyMap()));
+    assertEquals(1, count(tmp, "ta"));
+    assertEquals(1, count(tmp, "tc"));
+    assertFalse(java.nio.file.Files.exists(tmp.resolve("tb")), "failed table never created");
+    task.stop();
+  }
+
   @Test
   void emptyPreCommitReturnsEmpty(@TempDir Path tmp) {
     DeltaSinkTask task = task(tmp, 1000);

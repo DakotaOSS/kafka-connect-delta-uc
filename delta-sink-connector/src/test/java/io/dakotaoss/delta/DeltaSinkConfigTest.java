@@ -31,6 +31,16 @@ class DeltaSinkConfigTest {
   }
 
   @Test
+  void flushConcurrencyDefaultsToOneAndRejectsBelowOne() {
+    assertEquals(1, new DeltaSinkConfig(required()).flushConcurrency());
+    Map<String, String> p = required();
+    p.put(DeltaSinkConfig.FLUSH_CONCURRENCY, "0");
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+    p.put(DeltaSinkConfig.FLUSH_CONCURRENCY, "4");
+    assertEquals(4, new DeltaSinkConfig(p).flushConcurrency());
+  }
+
+  @Test
   void schemaEvolutionDefaultsToNone() {
     assertEquals(DeltaSinkConfig.EVOLVE_NONE, new DeltaSinkConfig(required()).schemaEvolution());
   }

@@ -105,6 +105,11 @@ With `schema.evolution=add`, a catalog-managed flush whose records carry new **n
 - *Accept:* additive batch evolves + appends instead of DLQ-ing; breaking change still DLQs; replay does not re-evolve; `none` reproduces today's behavior.
 - *Tests:* `SchemaEvolutionTest`, `UcColumnMapperTest` (add-columns DDL), `DeltaSinkConfigTest`; end-to-end `LiveSchemaEvolutionTest` *(live only)*.
 
+### R11 — Concurrent table commits *(opt-in)*
+`flush.concurrency` (int ≥1, default 1) bounds how many **tables** commit in parallel per flush. Default 1 is the serial path (unchanged). Above 1, the flush groups dirty partitions by table and commits independent tables concurrently on a bounded pool — overlapping the WAN round-trips on a writer that is ~2–3% CPU — while a single table's partitions stay serial within its task, so its reused snapshot is touched by one thread and per-partition `SetTransaction` order + effectively-once hold. A failed table fails the task (its offset never advances → redelivered); independent tables that succeeded keep their offsets.
+- *Accept:* default reproduces serial behavior; with >1, independent tables commit + advance offsets; one table's failure is surfaced while the others commit; never two concurrent commits to one table.
+- *Tests:* `DeltaSinkTaskTest.concurrentFlushCommitsAllTablesAndAdvancesOffsets` / `concurrentFlushSurfacesOneTableFailureWhileOthersCommit`, `DeltaSinkConfigTest`.
+
 ## Architecture
 
 ```mermaid
@@ -243,6 +248,7 @@ Config surface is `DeltaSinkConfig`. Defaults shown.
 | `flush.size` | int | 500 | rows buffered per partition before a commit; 0 disables this dial |
 | `flush.bytes` | long | 0 | approx buffered bytes before a commit, for target file size (e.g. 134217728 = 128 MiB); 0 disables |
 | `flush.interval.ms` | long | 5000 | max time to buffer a partition before committing |
+| `flush.concurrency` | int | 1 | tables committed in parallel per flush (1 = serial). >1 overlaps WAN round-trips for independent tables; one table's partitions stay serial |
 | `auto.create.tables` | boolean | true | create an absent catalog-managed table on first write, deriving schema + nullability from the record. Needs `databricks.warehouse.id` and `CREATE TABLE` on the schema. Set false to require pre-created tables |
 | `databricks.warehouse.id` | string | (empty) | SQL warehouse that runs the `CREATE TABLE` for `auto.create.tables` and the `ALTER TABLE ADD COLUMNS` for `schema.evolution`. Required when auto-creating or evolving |
 | `schema.evolution` | string | `none` | `none` DLQs schema-mismatched rows (fail-closed); `add` evolves a catalog-managed table for new **nullable top-level** columns via `ALTER TABLE ADD COLUMNS`, then appends. Drops/renames/type-changes stay poison. Needs `databricks.warehouse.id` |
