@@ -47,6 +47,13 @@ The live tests prove the full managed-UC path — table resolve, READ_WRITE cred
 write with the vended SAS, and a UC-coordinated commit — against a real Databricks workspace. They're
 the only thing that exercises catalog commits; the offline `file://` tests never load the ABFS stack.
 
+**Contributors don't need a workspace.** The live tests require a Databricks workspace with the Beta
+preview enabled, which outside contributors won't have, so they are **maintainer-run**: a maintainer
+runs them before merging any change to the write path. The offline `mvn test` suite (no Databricks, no
+network) is the gate you're expected to keep green on a PR — see [Build and offline
+tests](#build-and-offline-tests). Note in the PR description if a change touches the write path so a
+maintainer knows to run live before merge.
+
 ### Workspace setup (once)
 
 - DBR 16.4+.
@@ -136,3 +143,18 @@ move tests.
 
 Small, focused PRs. Keep `mvn test` green; if a change touches the write path, run the relevant live
 test before sending it (the offline suite can't see catalog commits). Match the surrounding style.
+
+## Governance
+
+`main` is protected. Changes land through a PR, never a direct push:
+
+- **PR required** — no direct pushes to `main`; branch, open a PR, merge from the PR.
+- **Green CI required** — the `ci`, `codeql`, and `security` checks must pass before merge. The live
+  tests are not a CI gate (they need a workspace); a maintainer runs them out of band for write-path
+  changes (see [Live tests](#live-tests)).
+- **Review required** — at least one approval from a code owner. Ownership is in
+  [`.github/CODEOWNERS`](.github/CODEOWNERS); the write path and security surface (auth, redaction,
+  CI config, threat model) are maintainer-owned.
+
+The offline CI is the contributor gate; the live tests and the code-owner review are the maintainer
+backstop for the parts CI can't see.
