@@ -47,77 +47,71 @@ enforce it. A change starts here — update the requirement and its test, then t
 Items marked *(live only)* are exercised only by the env-gated `Live*Test`; closing those
 offline-coverage gaps is tracked in the linked issues.
 
-- **R1 — Effectively-once delivery.** Each per-partition commit carries
-  `SetTransaction(appId=<connector>:<topic>-<partition>, version=lastOffset)`, and `preCommit` returns a
-  partition's offset only after its commit succeeds. *Acceptance:* re-applying the same `(appId,
-  version)` adds no rows; offsets advance only post-commit. *Enforced by:*
-  `DeltaKernelWriterTest.idempotentReplayDoesNotDuplicate`,
-  `DeltaSinkTaskTest.preCommitFlushesAndReturnsNextOffset`.
-- **R2 — Append-only bronze.** No UPDATE/DELETE/MERGE; nested STRUCT maps, top-level ARRAY/MAP are
-  rejected at schema-map time. *Acceptance:* an ARRAY/MAP column fails mapping; only appends are emitted.
-  *Enforced by:* `SchemaMapperTest`, `RecordConverterTest`.
-- **R3 — Injective, bounded routing.** `${topic}`/`${topic[N]}` substitutes must be valid UC identifier
-  parts (`[A-Za-z0-9_]`, ≤255) or routing is rejected (never folded); `topic.to.table` overrides win and
-  match the exact topic; the result is 3-part. *Acceptance:* `orders-eu`/`orders.eu` are rejected (not
-  collapsed to `orders_eu`); a >255-char part is rejected; overrides resolve verbatim. *Enforced by:*
-  `UcTableResolverTest` (`rejectsOutOfSetCharactersInsteadOfCollapsing`, `rejectsOversizedIdentifierPart`,
-  `explicitMapOverridesTemplateButFallsBackWhenUnmapped`, `rejectsResultThatIsNotThreePartName`).
-- **R4 — Credential handling.** The vended SAS is held as `char[]` in `VendedSasStore` (never in the
-  Hadoop `Configuration`) and vended per request path by `VendedSasTokenProvider`; the bearer token is a
-  `Supplier<String>` read at the HTTP boundary; cached state re-vends proactively at `REFRESH_MS`.
-  *Acceptance:* `abfsConfig` places no SAS in the config and wires the provider; the store vends the
-  directory-scoped token by path; the client re-reads the token each request. *Enforced by:*
-  `VendedSasStoreTest`, `BearerTokenProviderTest`,
-  `UnityCatalogClientTest.buildsProviderBasedAbfsConfigAndStoresSasOutOfConfig` /
-  `readsBearerTokenFromSupplierPerRequest`.
-- **R4a — Durable authentication.** `databricks.auth.type` selects a `CredentialProvider`: `pat`
-  (static token), `oauth-m2m`, or `azure-entra` (service-principal client-credentials, minted by the
-  connector). OAuth modes refresh proactively at ~80% of token lifetime, single-flight, tolerating a
-  transient mint failure while the cached token is still valid — so a token never expires unattended
-  and the expired-token retry storm does not arise. Secrets never appear in logs/exceptions.
-  *Acceptance:* refresh-before-expiry, single-flight, mint-failure tolerance, force-refresh on
-  `invalidate()`; OAuth/Entra mint parse + non-2xx without leaking the response body; config
-  validation per auth type. *Enforced by:* `RefreshingCredentialTest`, `OAuthMinterTest`,
-  `DeltaSinkConfigTest` (auth-type cases + `patFactoryReturnsConfiguredToken`).
-- **R5 — Secret redaction.** No vended SAS or bearer token reaches a log, exception message, or DLQ
-  record. *Acceptance:* `Redact` masks whole `abfss://` URLs and SAS/bearer/`sas_token` fragments; a
-  flush failure carrying a SAS is redacted before it reaches the DLQ reporter and the thrown exception.
-  *Enforced by:* `RedactTest`, `DeltaSinkTaskTest.flushRedactsSasBeforeThrowing` /
-  `flushRedactsSasBeforeDlqReport`.
-- **R6 — Catalog-commit protocol.** stage → ratify (first-writer-wins) → publish/backfill → checkpoint;
-  `commitInfo` carries `operationMetrics`/`operationParameters`/`isBlindAppend`; an already-present
-  checkpoint is idempotent. *Acceptance:* a commit ratifies once, publishes the numbered json, enriches
-  commitInfo, and a re-run past a checkpoint-interval version does not fail. *(live only — offline
-  coverage tracked in #25.)*
-- **R7 — Flush cadence.** `flush.size` / `flush.bytes` / `flush.interval.ms`, whichever trips first; all
-  three disabled is a config error. *Acceptance:* the byte dial flushes before the row dial; all-off is
-  rejected at config time. *Enforced by:* `DeltaSinkTaskTest.byteDialFlushesBeforeRowThreshold` /
-  `opportunisticFlushWhenBufferReachesFlushSize`, `DeltaSinkConfigTest`.
-- **R8 — Fail-closed errors + bounded memory.** Poison rows / unwritable batches go to the DLQ when a
-  reporter is configured, else fail the task; total buffered rows are capped at `MAX_BUFFERED_RECORDS`
-  with `RetriableException` backpressure. *Acceptance:* a poison record with no reporter fails the task;
-  past the cap `put` throws `RetriableException`. *Enforced by:*
-  `DeltaSinkTaskTest.schemalessRecordIsRejected`; *backpressure is live/untested — tracked in #31.*
-- **R9 — Config validation.** `databricks.workspace.url` must be `https`; `topic.to.table` entries must
-  be `<topic>:<catalog>.<schema>.<table>`; at least one flush dial must be enabled. *Enforced by:*
-  `DeltaSinkConfigTest`.
+### R1 — Effectively-once delivery
+Each per-partition commit carries `SetTransaction(appId=<connector>:<topic>-<partition>, version=lastOffset)`, and `preCommit` returns a partition's offset only after its commit succeeds.
+- *Accept:* re-applying the same `(appId, version)` adds no rows; offsets advance only post-commit.
+- *Tests:* `DeltaKernelWriterTest.idempotentReplayDoesNotDuplicate`, `DeltaSinkTaskTest.preCommitFlushesAndReturnsNextOffset`.
+
+### R2 — Append-only bronze
+No UPDATE/DELETE/MERGE; nested STRUCT maps, while top-level ARRAY/MAP are rejected at schema-map time.
+- *Accept:* an ARRAY/MAP column fails mapping; only appends are emitted.
+- *Tests:* `SchemaMapperTest`, `SchemaMapperGuardTest`, `RecordConverterTest`, `RecordConverterNestedTest`.
+
+### R3 — Injective, bounded routing
+`${topic}`/`${topic[N]}` substitutes must be valid UC identifier parts (`[A-Za-z0-9_]`, ≤255) or routing is rejected (never folded); `topic.to.table` overrides win and match the exact topic; the result is 3-part.
+- *Accept:* `orders-eu`/`orders.eu` are rejected (not collapsed to `orders_eu`); a >255-char part is rejected; overrides resolve verbatim.
+- *Tests:* `UcTableResolverTest` — `rejectsOutOfSetCharactersInsteadOfCollapsing`, `rejectsOversizedIdentifierPart`, `explicitMapOverridesTemplateButFallsBackWhenUnmapped`, `rejectsResultThatIsNotThreePartName`.
+
+### R4 — Credential handling
+The vended SAS is held as `char[]` in `VendedSasStore` (never in the Hadoop `Configuration`) and vended per request path by `VendedSasTokenProvider`; the bearer token is a `Supplier<String>` read at the HTTP boundary; cached state re-vends proactively at `REFRESH_MS`.
+- *Accept:* `abfsConfig` places no SAS in the config and wires the provider; the store vends the directory-scoped token by path (bounded per host, declining ambiguous account names); the client re-reads the token each request.
+- *Tests:* `VendedSasStoreTest`, `BearerTokenProviderTest`, `UnityCatalogClientTest.buildsProviderBasedAbfsConfigAndStoresSasOutOfConfig` / `readsBearerTokenFromSupplierPerRequest`.
+
+### R4a — Durable authentication
+`databricks.auth.type` selects a `CredentialProvider`: `pat` (static token), `oauth-m2m`, or `azure-entra` (service-principal client-credentials, minted by the connector). OAuth modes refresh proactively at ~80% of token lifetime, single-flight, tolerating a transient mint failure while the cached token is still valid — so a token never expires unattended and the expired-token retry storm does not arise. Secrets never appear in logs/exceptions.
+- *Accept:* refresh-before-expiry, single-flight, mint-failure tolerance, force-refresh on `invalidate()`; OAuth/Entra mint parse + non-2xx without leaking the response body; config validation per auth type.
+- *Tests:* `RefreshingCredentialTest`, `OAuthMinterTest`, `DeltaSinkConfigTest` (auth-type cases + `patFactoryReturnsConfiguredToken`).
+
+### R5 — Secret redaction
+No vended SAS or bearer token reaches a log, exception message, or DLQ record.
+- *Accept:* `Redact` masks whole `abfss://` URLs and SAS/bearer/`sas_token` fragments and recurses the throwable cause chain; a flush failure carrying a SAS is redacted before it reaches the DLQ reporter and the thrown exception, and `resolve()` keeps only the redacted message.
+- *Tests:* `RedactTest`, `UcTableResolverTest.resolveFailureDropsRawCause`, `DeltaSinkTaskTest.flushRedactsSasBeforeThrowing` / `flushRedactsSasBeforeDlqReport`.
+
+### R6 — Catalog-commit protocol
+stage → ratify (first-writer-wins) → publish/backfill → checkpoint; `commitInfo` carries `operationMetrics`/`operationParameters`/`isBlindAppend`; an already-present checkpoint is idempotent.
+- *Accept:* a commit ratifies once, publishes the numbered json, enriches commitInfo, and a re-run past a checkpoint-interval version does not fail.
+- *Tests:* offline `UnityCatalogCommitterTest` (enrich / dedup / sort / backfill); the full protocol is exercised live by `Live*Test`.
+
+### R7 — Flush cadence
+`flush.size` / `flush.bytes` / `flush.interval.ms`, whichever trips first; all three disabled is a config error.
+- *Accept:* the byte dial flushes before the row dial; all-off is rejected at config time.
+- *Tests:* `DeltaSinkTaskTest.byteDialFlushesBeforeRowThreshold` / `opportunisticFlushWhenBufferReachesFlushSize`, `DeltaSinkConfigTest`.
+
+### R8 — Fail-closed errors + bounded memory
+Poison rows / unwritable batches go to the DLQ when a reporter is configured, else fail the task; total buffered rows are capped at `MAX_BUFFERED_RECORDS` with `RetriableException` backpressure.
+- *Accept:* a poison record with no reporter fails the task; past the cap `put` throws `RetriableException`.
+- *Tests:* `DeltaSinkTaskTest.schemalessRecordIsRejected`, `DeltaSinkTaskConcurrencyTest.putThrowsRetriableOncePastTheBufferedCeiling`.
+
+### R9 — Config validation
+`databricks.workspace.url` must be `https`; `topic.to.table` entries must be `<topic>:<catalog>.<schema>.<table>`; at least one flush dial must be enabled.
+- *Tests:* `DeltaSinkConfigTest`.
 
 ## Architecture
 
 ```mermaid
 graph TD
-    K["Warpstream / Kafka topic"]
+    K["Kafka / Warpstream topic"]
     P["DeltaSinkTask.put()<br/>buffer per topic-partition"]
-    S["SchemaMapper + RecordConverter<br/>Connect STRUCT → Kernel StructType<br/>records → FilteredColumnarBatch (physical encoding)"]
-    R["UcTableResolver → UnityCatalogClient<br/>GET /tables → table_id + abfss:// storage_location<br/>POST /temporary-table-credentials → READ_WRITE SAS<br/>→ SAS into VendedSasStore (char[]); ABFS uses per-host VendedSasTokenProvider<br/>(one cached FileSystem per host serves many tables)"]
+    S["SchemaMapper + RecordConverter<br/>Connect STRUCT → Kernel batch"]
+    R["UcTableResolver + UnityCatalogClient<br/>resolve table id + vend SAS"]
     E["EngineProvider<br/>DefaultEngine + Hadoop conf"]
-    W["DeltaKernelWriter.appendToSnapshot()<br/>transform → write Parquet → generateAppendActions → txn.commit"]
-    C["UnityCatalogCommitter (Kernel CatalogCommitter)<br/>stage commit file under _staged_commits/<br/>→ UC ratify (first-writer-wins)"]
-    M["post-commit snapshot reused for next append<br/>maintenance: publish/backfill + checkpoint (async)"]
-    O["offset returned from preCommit()<br/>only after the commit succeeds"]
+    W["DeltaKernelWriter<br/>write Parquet → txn.commit"]
+    C["UnityCatalogCommitter<br/>stage → UC ratify (first-writer-wins)"]
+    M["reuse post-commit snapshot<br/>publish + checkpoint (async)"]
+    O["preCommit() returns offset<br/>after the commit succeeds"]
 
-    K -->|"Debezium CDC envelope<br/>(post-ExtractNewRecordState: flattened)"| P
-    P -->|"flush.size rows OR flush.bytes OR flush.interval.ms<br/>(whichever trips first)"| S
+    K -->|"CDC envelope (flattened)"| P
+    P -->|"flush.size / .bytes / .interval.ms"| S
     S --> R
     R --> E
     E --> W
@@ -125,6 +119,8 @@ graph TD
     C --> M
     M --> O
 ```
+
+(Detail per stage is in the sections below; the diagram shows the flow.)
 
 Per-table state (`DeltaSinkTask.TableState`) is resolved once and cached: the engine, the committer,
 and — for catalog-managed tables — the snapshot, which is advanced in memory across commits rather than

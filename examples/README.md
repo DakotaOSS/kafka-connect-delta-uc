@@ -1,55 +1,75 @@
-# examples — debezium → delta CDC pipeline
+# Examples — Debezium → Delta CDC pipeline
 
-end-to-end CDC: SQL Server → Debezium → Kafka → this sink → append-only bronze Delta in Unity
-Catalog → downstream MERGE for current state. two connector configs run on the same Connect worker.
+End-to-end CDC: SQL Server → Debezium → Kafka → this sink → append-only bronze Delta in Unity
+Catalog → downstream MERGE for current state. Two connector configs run on the same Connect worker.
 
+```mermaid
+graph TD
+    SQL["SQL Server (CDC enabled)"]
+    DBZ["debezium-sqlserver-source.json<br/>SqlServerConnector"]
+    KAFKA["Kafka topics<br/>dakota.sales.dbo.customers / .orders"]
+    SINK["delta-uc-sink.json (this connector)<br/>ExtractNewRecordState → after-image + op/lsn/ts_ms"]
+    BRONZE["bronze Delta (UC managed)<br/>bronze.&lt;db&gt;.&lt;table&gt; — append-only change log"]
+    CUR["curated current-state<br/>main.curated.*"]
+
+    SQL --> DBZ --> KAFKA --> SINK --> BRONZE
+    BRONZE -->|"MERGE / AUTO CDC, ordered by lsn"| CUR
 ```
-SQL Server (CDC enabled)
-   │  debezium-sqlserver-source.json  (io.debezium.connector.sqlserver.SqlServerConnector)
-   ▼
-Kafka topics  dakota.sales.dbo.customers, dakota.sales.dbo.orders   (Debezium envelope)
-   │  delta-uc-sink.json  (io.dakotaoss.delta.DeltaSinkConnector)
-   │    ExtractNewRecordState flattens envelope → after-image + op/lsn/ts_ms
-   ▼
-bronze Delta (UC managed, catalog-managed)  bronze.<db>.<table>      ── append-only, full change log
-   │  MERGE / AUTO CDC in Databricks, ordered by lsn
-   ▼
-curated current-state tables  main.curated.*
-```
 
-bronze is the full change log, never mutated in place. the sink is append-only (Kernel write API has no
-DML); deletes/updates land as rows and are resolved downstream. see
+Bronze is the full change log, never mutated in place. The sink is append-only (the Kernel write API has
+no DML); deletes and updates land as rows and are resolved downstream. See
 [../docs/SPEC.md](../docs/SPEC.md) for the commit protocol and merge templates.
 
-## files
+## Files
 
-- `debezium-sqlserver-source.json` — Debezium SQL Server source. emits one topic per captured table,
+- `debezium-sqlserver-source.json` — Debezium SQL Server source. Emits one topic per captured table,
   named `<topic.prefix>.<database>.<schema>.<table>` (here `dakota.sales.dbo.customers`, `dakota.sales.dbo.orders`).
 - `delta-uc-sink.json` — this connector, consuming those topics. `ExtractNewRecordState` flattens the
-  envelope; `table.name.format` routes each topic to a bronze table; the three flush dials set the
-  commit cadence.
+  envelope; routing maps each topic to a bronze table; the three flush dials set the commit cadence.
 
-## the SMT and the columns it keeps
+## The SMT and the columns it keeps
 
 `transforms.unwrap.add.fields=op,source.lsn,source.ts_ms` flattens the envelope to the after-image and
 re-adds three metadata fields. Debezium prefixes added fields with `__`, so the flattened value carries:
 
 - `__op` — `c`/`u`/`d`/`r`
-- `__source_lsn` — SQL Server LSN, the **monotonic source sequence**
-- `__source_ts_ms` — source commit time
+- `__source_lsn` — the SQL Server LSN, i.e. the **monotonic source sequence**
+- `__source_ts_ms` — the source commit time
 
 `delete.handling.mode=rewrite` turns deletes into a normal row with `__deleted=true` (and `__op=d`)
 instead of a null value, so tombstones reach bronze as rows. `drop.tombstones=false` keeps the Kafka
 tombstone too.
 
-keep `__op` + a monotonic sequence (`__source_lsn`) on every bronze row — the downstream MERGE orders
-and dedupes on the sequence, not arrival order. without it you cannot resolve out-of-order or duplicate
-events.
+Keep `__op` plus a monotonic sequence (`__source_lsn`) on every bronze row — the downstream MERGE orders
+and dedupes on the sequence, not on arrival order. Without it you cannot resolve out-of-order or
+duplicate events.
 
-## bronze table (create once, per topic)
+## Routing topics to tables
 
-the catalog-managed sink appends to a pre-created table; it does not create catalog-managed tables. the
-table schema must match the flattened value, columns nullable (Kernel enforces nullability):
+There are two ways to map a topic to a `catalog.schema.table`, and you can mix them.
+
+**Template** (`table.name.format`) derives the destination from the topic's dot-segments, so one rule
+covers many topics. The example uses `bronze.${topic[1]}.${topic[3]}`, so topic
+`dakota.sales.dbo.customers` (segments `dakota`/`sales`/`dbo`/`customers`, 0-indexed) routes to
+`bronze.sales.customers`, and `dakota.sales.dbo.orders` to `bronze.sales.orders` — no per-topic config.
+
+**Explicit overrides** (`topic.to.table`) pin specific topics to arbitrary destinations, and a match
+wins over the template. The value is comma-separated `<topic>:<catalog>.<schema>.<table>` entries:
+
+```json
+"topic.to.table": "dakota.sales.dbo.customers:bronze.sales.customers,dakota.sales.dbo.orders:main.cdc.orders_raw"
+```
+
+Here `customers` lands in `bronze.sales.customers` (same as the template) while `orders` is pinned to a
+different destination, `main.cdc.orders_raw`. Every resolved name must be a valid three-part
+`catalog.schema.table`. Routing requires the **External Access to UC Managed Delta Table** Beta and
+DBR 16.4+ (see [../README.md](../README.md#status)).
+
+## Bronze table (create once, per topic)
+
+The catalog-managed sink appends to a pre-created table — auto-creating the catalog-managed table on
+first write is planned but not yet implemented, so create it first. The schema must match the flattened
+value, with all columns nullable (Kernel enforces nullability):
 
 ```sql
 CREATE TABLE bronze.sales.customers (
@@ -58,31 +78,23 @@ CREATE TABLE bronze.sales.customers (
 ) TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
 ```
 
-the example sets `table.name.format = "bronze.${topic[1]}.${topic[3]}"`, so topic
-`dakota.sales.dbo.customers` (segments `dakota`/`sales`/`dbo`/`customers`) routes to
-`bronze.sales.customers`, and `dakota.sales.dbo.orders` to `bronze.sales.orders` — one connector,
-many tables, no per-topic config. to pin a topic to an arbitrary destination instead, add a
-`topic.to.table` entry (`<topic>:<catalog>.<schema>.<table>`) that wins over the template. requires
-the **External Access to UC Managed Delta Table** Beta and DBR 16.4+ (see
-[../README.md](../README.md#status)).
+## Prerequisites
 
-## prerequisites
-
-- the connector jar on the Connect worker plugin path. build it from `delta-sink-connector/`:
+- The connector jar on the Connect worker plugin path. Build it from `delta-sink-connector/`:
   ```
   docker run --rm -v "$PWD/delta-sink-connector:/work" -w /work maven:3.9-eclipse-temurin-17 mvn -B package
   ```
-- Debezium SQL Server connector on the same worker.
+- The Debezium SQL Server connector on the same worker.
 - SQL Server with CDC enabled on the captured tables (`sys.sp_cdc_enable_table`), and an agent that can
   read the CDC tables.
-- Databricks workspace: External Access to UC Managed Delta Table Beta enabled, DBR 16.4+, token
-  principal granted `EXTERNAL USE SCHEMA` on `main.ingestion`, bronze tables created (above).
-- secrets externalised via the worker's config provider. both configs read
+- A Databricks workspace with the External Access to UC Managed Delta Table Beta enabled, DBR 16.4+, the
+  token principal granted `EXTERNAL USE SCHEMA` on the target schema, and the bronze tables created (above).
+- Secrets externalised via the worker's config provider. Both configs read
   `${file:/opt/secrets/*.properties:key}`; wire `FileConfigProvider` (or your provider) on the worker.
 
-## post the configs
+## Post the configs
 
-source first (so the topics exist), then the sink:
+Source first (so the topics exist), then the sink:
 
 ```
 curl -s -XPOST -H 'Content-Type: application/json' \
@@ -92,15 +104,15 @@ curl -s -XPOST -H 'Content-Type: application/json' \
   http://localhost:8083/connectors -d @delta-uc-sink.json
 ```
 
-check status:
+Check status:
 
 ```
 curl -s http://localhost:8083/connectors/delta-sink-cdc/status
 ```
 
-## downstream MERGE
+## Downstream MERGE
 
-bronze → current state in Databricks, ordered by `__source_lsn`. last-write-wins, deletes applied:
+Bronze → current state in Databricks, ordered by `__source_lsn`. Last-write-wins, with deletes applied:
 
 ```sql
 MERGE INTO main.curated.customers t
@@ -116,6 +128,6 @@ WHEN MATCHED AND s.__source_lsn > t.__source_lsn THEN UPDATE SET *
 WHEN NOT MATCHED AND s.__op <> 'd'           THEN INSERT *;
 ```
 
-the `__source_lsn >` guard makes replays no-ops, so bronze idempotency and merge idempotency compose.
+The `__source_lsn >` guard makes replays no-ops, so bronze idempotency and merge idempotency compose. A
 declarative alternative (Lakeflow AUTO CDC, `sequence_by = __source_lsn`) is in
 [../docs/SPEC.md](../docs/SPEC.md#downstream-merge-templates).
