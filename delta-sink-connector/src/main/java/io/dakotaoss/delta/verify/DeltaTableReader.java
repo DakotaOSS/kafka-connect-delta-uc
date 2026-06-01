@@ -80,6 +80,25 @@ public final class DeltaTableReader {
     return readRows(engine, localTablePath, readSchema).size();
   }
 
+  /**
+   * Read the first data batch as a live {@link ColumnarBatch} for inspecting nested/collection
+   * columns that {@link #readRows} can't flatten into {@code Object[]}. Tests writing a single batch
+   * use this to assert array/map encoding round-trips. The iterator is left open intentionally:
+   * Kernel's in-memory vectors stay valid for the returned batch, and this is a local-FS test helper.
+   */
+  public static ColumnarBatch readBatch(Engine engine, String localTablePath, StructType readSchema)
+      throws IOException {
+    List<FileStatus> dataFiles = liveDataFiles(localTablePath);
+    CloseableIterator<io.delta.kernel.engine.FileReadResult> batches =
+        engine
+            .getParquetHandler()
+            .readParquetFiles(Iters.closeable(dataFiles.iterator()), readSchema, Optional.empty());
+    if (!batches.hasNext()) {
+      throw new IllegalStateException("no data batches at " + localTablePath);
+    }
+    return batches.next().getData();
+  }
+
   private static List<FileStatus> liveDataFiles(String localTablePath) throws IOException {
     Path logDir = Paths.get(localTablePath, "_delta_log");
     List<FileStatus> added = new ArrayList<>();

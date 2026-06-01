@@ -1,5 +1,6 @@
 package io.dakotaoss.delta.schema;
 
+import io.delta.kernel.types.ArrayType;
 import io.delta.kernel.types.BinaryType;
 import io.delta.kernel.types.BooleanType;
 import io.delta.kernel.types.ByteType;
@@ -10,6 +11,7 @@ import io.delta.kernel.types.DoubleType;
 import io.delta.kernel.types.FloatType;
 import io.delta.kernel.types.IntegerType;
 import io.delta.kernel.types.LongType;
+import io.delta.kernel.types.MapType;
 import io.delta.kernel.types.ShortType;
 import io.delta.kernel.types.StringType;
 import io.delta.kernel.types.StructField;
@@ -26,12 +28,13 @@ import org.apache.kafka.connect.errors.DataException;
 /**
  * Connect value schema (STRUCT) -> Delta Kernel {@link StructType}.
  *
- * <p>Covers primitives + the logical types seen in CDC / time-series ingestion. ARRAY/MAP throw
- * {@link UnsupportedOperationException}; add them here when needed.
+ * <p>Covers primitives + the logical types seen in CDC / time-series ingestion, nested STRUCTs, and
+ * ARRAY/MAP collections (recursively).
  */
 public final class SchemaMapper {
 
-  // Cap struct recursion so a hostile deeply-nested schema can't StackOverflow.
+  // Cap recursion so a hostile deeply-nested schema can't StackOverflow. Structs, arrays, and maps
+  // all count toward depth.
   private static final int MAX_DEPTH = 32;
 
   private SchemaMapper() {}
@@ -114,12 +117,24 @@ public final class SchemaMapper {
         }
         return toKernel(schema, depth + 1); // nested record, e.g. Debezium before/after/source
       case ARRAY:
+        if (depth >= MAX_DEPTH) {
+          throw new DataException("Schema nesting exceeds max depth " + MAX_DEPTH);
+        }
+        // element nullability follows the element schema's optionality.
+        return new ArrayType(
+            toKernelType(schema.valueSchema(), depth + 1), schema.valueSchema().isOptional());
       case MAP:
+        if (depth >= MAX_DEPTH) {
+          throw new DataException("Schema nesting exceeds max depth " + MAX_DEPTH);
+        }
+        // map keys are non-null in Delta; value nullability follows the value schema.
+        return new MapType(
+            toKernelType(schema.keySchema(), depth + 1),
+            toKernelType(schema.valueSchema(), depth + 1),
+            schema.valueSchema().isOptional());
       default:
         throw new UnsupportedOperationException(
-            "Unsupported Connect type for Delta mapping: "
-                + schema.type()
-                + ". ARRAY/MAP are an extension point (see SchemaMapper).");
+            "Unsupported Connect type for Delta mapping: " + schema.type());
     }
   }
 

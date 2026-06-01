@@ -1,5 +1,7 @@
 package io.dakotaoss.delta.schema;
 
+import java.util.List;
+import java.util.Map;
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.sink.SinkRecord;
@@ -7,7 +9,7 @@ import org.apache.kafka.connect.sink.SinkRecord;
 /**
  * Rough in-memory byte estimate of a record value, for the {@code flush.bytes} dial. Not the
  * serialized/Parquet size; only needs to bound buffer growth and keep file sizes sane. Strings
- * count 2 bytes/char, fixed-width primitives their natural width, structs recurse.
+ * count 2 bytes/char, fixed-width primitives their natural width, structs/arrays/maps recurse.
  */
 public final class RecordSizeEstimator {
 
@@ -26,6 +28,20 @@ public final class RecordSizeEstimator {
       long total = 0;
       for (Field field : struct.schema().fields()) {
         total += sizeOf(struct.get(field));
+      }
+      return total;
+    }
+    if (value instanceof List) {
+      long total = 0;
+      for (Object e : (List<?>) value) {
+        total += sizeOf(e);
+      }
+      return total;
+    }
+    if (value instanceof Map) {
+      long total = 0;
+      for (Map.Entry<?, ?> e : ((Map<?, ?>) value).entrySet()) {
+        total += sizeOf(e.getKey()) + sizeOf(e.getValue());
       }
       return total;
     }

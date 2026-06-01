@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.dakotaoss.delta.schema.SchemaMapper;
+import io.delta.kernel.types.ArrayType;
 import io.delta.kernel.types.BinaryType;
 import io.delta.kernel.types.BooleanType;
 import io.delta.kernel.types.ByteType;
@@ -15,6 +16,7 @@ import io.delta.kernel.types.DoubleType;
 import io.delta.kernel.types.FloatType;
 import io.delta.kernel.types.IntegerType;
 import io.delta.kernel.types.LongType;
+import io.delta.kernel.types.MapType;
 import io.delta.kernel.types.ShortType;
 import io.delta.kernel.types.StringType;
 import io.delta.kernel.types.StructType;
@@ -88,9 +90,18 @@ class SchemaMapperTest {
   }
 
   @Test
-  void rejectsNestedComplexTypes() {
-    Schema withArray =
-        SchemaBuilder.struct().field("tags", SchemaBuilder.array(Schema.STRING_SCHEMA).build()).build();
-    assertThrows(UnsupportedOperationException.class, () -> SchemaMapper.toKernel(withArray));
+  void mapsTopLevelArrayAndMap() {
+    Schema connect =
+        SchemaBuilder.struct()
+            .field("tags", SchemaBuilder.array(Schema.STRING_SCHEMA).build())
+            .field("attrs", SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.INT32_SCHEMA).build())
+            .build();
+    StructType k = SchemaMapper.toKernel(connect);
+    assertTrue(k.at(0).getDataType() instanceof ArrayType);
+    assertTrue(((ArrayType) k.at(0).getDataType()).getElementType() instanceof StringType);
+    assertTrue(k.at(1).getDataType() instanceof MapType);
+    MapType m = (MapType) k.at(1).getDataType();
+    assertTrue(m.getKeyType() instanceof StringType);
+    assertTrue(m.getValueType() instanceof IntegerType);
   }
 }

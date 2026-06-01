@@ -1,12 +1,14 @@
 package io.dakotaoss.delta.data;
 
+import io.delta.kernel.data.ArrayValue;
 import io.delta.kernel.data.ColumnVector;
+import io.delta.kernel.data.MapValue;
 import io.delta.kernel.types.DataType;
 
 import java.math.BigDecimal;
 
 /**
- * In-memory {@link ColumnVector} for one column of a write batch. Two shapes:
+ * In-memory {@link ColumnVector} for one column of a write batch. Four shapes:
  *
  * <ul>
  *   <li>Leaf: {@code Object[]} of values already in Kernel's physical representation ({@code Integer},
@@ -14,16 +16,22 @@ import java.math.BigDecimal;
  *       {@code String}, {@code byte[]}, {@code BigDecimal}); {@code null} is SQL NULL.</li>
  *   <li>Struct: one child vector per field plus a per-row null flag, read via {@link #getChild(int)}.
  *       Carries nested CDC envelopes (e.g. Debezium before/after).</li>
+ *   <li>Array: one flat element child vector plus per-row offsets and a per-row null flag;
+ *       {@link #getArray(int)} returns an {@link ArrayValue} over the row's element slice.</li>
+ *   <li>Map: key + value child vectors plus per-row offsets and a per-row null flag;
+ *       {@link #getMap(int)} returns a {@link MapValue} over the row's key/value slices.</li>
  * </ul>
- *
- * <p>ARRAY and MAP are not handled.
  */
 public final class GenericColumnVector implements ColumnVector {
 
   private final DataType dataType;
-  private final Object[] values; // leaf mode; null in struct mode
-  private final ColumnVector[] children; // struct mode; null in leaf mode
-  private final boolean[] structNulls; // struct mode: per-row null
+  private final Object[] values; // leaf mode; null otherwise
+  private final ColumnVector[] children; // struct mode; null otherwise
+  private final boolean[] rowNulls; // struct/array/map mode: per-row null
+  private final ColumnVector elements; // array mode: flat element child
+  private final ColumnVector keys; // map mode: flat key child
+  private final ColumnVector mapValues; // map mode: flat value child
+  private final int[] offsets; // array/map mode: row r spans [offsets[r], offsets[r+1])
   private final int size;
 
   /** Leaf column. */
@@ -31,7 +39,11 @@ public final class GenericColumnVector implements ColumnVector {
     this.dataType = dataType;
     this.values = values;
     this.children = null;
-    this.structNulls = null;
+    this.rowNulls = null;
+    this.elements = null;
+    this.keys = null;
+    this.mapValues = null;
+    this.offsets = null;
     this.size = values.length;
   }
 
@@ -40,8 +52,46 @@ public final class GenericColumnVector implements ColumnVector {
     this.dataType = dataType;
     this.values = null;
     this.children = children;
-    this.structNulls = structNulls;
+    this.rowNulls = structNulls;
+    this.elements = null;
+    this.keys = null;
+    this.mapValues = null;
+    this.offsets = null;
     this.size = structNulls.length;
+  }
+
+  private GenericColumnVector(
+      DataType dataType,
+      ColumnVector elements,
+      ColumnVector keys,
+      ColumnVector mapValues,
+      int[] offsets,
+      boolean[] rowNulls) {
+    this.dataType = dataType;
+    this.values = null;
+    this.children = null;
+    this.rowNulls = rowNulls;
+    this.elements = elements;
+    this.keys = keys;
+    this.mapValues = mapValues;
+    this.offsets = offsets;
+    this.size = rowNulls.length;
+  }
+
+  /** Array column: flat element vector, per-row offsets (length size+1), per-row null flag. */
+  public static GenericColumnVector forArray(
+      DataType dataType, ColumnVector elements, int[] offsets, boolean[] rowNulls) {
+    return new GenericColumnVector(dataType, elements, null, null, offsets, rowNulls);
+  }
+
+  /** Map column: flat key + value vectors, per-row offsets (length size+1), per-row null flag. */
+  public static GenericColumnVector forMap(
+      DataType dataType,
+      ColumnVector keys,
+      ColumnVector values,
+      int[] offsets,
+      boolean[] rowNulls) {
+    return new GenericColumnVector(dataType, null, keys, values, offsets, rowNulls);
   }
 
   @Override
@@ -61,11 +111,23 @@ public final class GenericColumnVector implements ColumnVector {
         child.close();
       }
     }
+    if (elements != null) {
+      elements.close();
+    }
+    if (keys != null) {
+      keys.close();
+    }
+    if (mapValues != null) {
+      mapValues.close();
+    }
   }
 
   @Override
   public boolean isNullAt(int rowId) {
-    return children != null ? structNulls[rowId] : values[rowId] == null;
+    if (rowNulls != null) {
+      return rowNulls[rowId];
+    }
+    return values[rowId] == null;
   }
 
   @Override
@@ -74,6 +136,28 @@ public final class GenericColumnVector implements ColumnVector {
       throw new UnsupportedOperationException("getChild called on a non-struct column");
     }
     return children[ordinal];
+  }
+
+  @Override
+  public ArrayValue getArray(int rowId) {
+    if (elements == null) {
+      throw new UnsupportedOperationException("getArray called on a non-array column");
+    }
+    if (rowNulls[rowId]) {
+      return null;
+    }
+    return new GenericArrayValue(elements, offsets[rowId], offsets[rowId + 1]);
+  }
+
+  @Override
+  public MapValue getMap(int rowId) {
+    if (keys == null) {
+      throw new UnsupportedOperationException("getMap called on a non-map column");
+    }
+    if (rowNulls[rowId]) {
+      return null;
+    }
+    return new GenericMapValue(keys, mapValues, offsets[rowId], offsets[rowId + 1]);
   }
 
   @Override

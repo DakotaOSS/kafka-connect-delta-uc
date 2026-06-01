@@ -333,8 +333,8 @@ flush fails. Reconcile the Connect record schema with the table, or evolve the
 table first. When an errant-record reporter is configured (`errors.tolerance=all` + a DLQ
 topic), a rejected commit routes its batch to the DLQ and advances past it; with no
 reporter configured the task fails closed rather than silently dropping bronze rows.
-Top-level `ARRAY`/`MAP` columns are rejected at schema-map
-time (only nested `STRUCT` is supported); restructure or drop them in an SMT.
+`STRUCT`, `ARRAY`, and `MAP` columns are supported and map recursively (bounded by the schema
+depth cap), so list/map fields write through to typed Delta columns.
 
 **Poison records & DLQ.** Records with a null/non-Struct value or a schema differing from the batch's
 reference schema are poison. With a Connect errant-record reporter configured (`errors.tolerance=all`
