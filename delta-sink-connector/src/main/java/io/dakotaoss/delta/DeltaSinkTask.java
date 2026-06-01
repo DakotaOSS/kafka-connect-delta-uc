@@ -4,7 +4,6 @@ import io.dakotaoss.delta.auth.CredentialProvider;
 import io.dakotaoss.delta.auth.Credentials;
 import io.dakotaoss.delta.model.TableTarget;
 import io.dakotaoss.delta.schema.RecordConverter;
-import io.dakotaoss.delta.schema.RecordSizeEstimator;
 import io.dakotaoss.delta.schema.SchemaMapper;
 import io.dakotaoss.delta.uc.TableResolver;
 import io.dakotaoss.delta.uc.UcColumnMapper;
@@ -19,7 +18,6 @@ import io.delta.kernel.TransactionCommitResult;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.types.StructType;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,7 +28,6 @@ import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.errors.RetriableException;
@@ -84,9 +81,9 @@ public final class DeltaSinkTask extends SinkTask {
   private long flushIntervalMs;
 
   private final Object lock = new Object();
-  private final Map<TopicPartition, List<SinkRecord>> buffers = new HashMap<>();
-  private final Map<TopicPartition, Long> bufferStartMs = new HashMap<>();
-  private final Map<TopicPartition, Long> bufferBytes = new HashMap<>();
+  // per-partition rows/bytes/start bookkeeping; all access is under lock (built in start()/test ctor
+  // once flush.bytes is known, so it can skip byte estimation when the dial is off).
+  private RecordBuffer buffer;
   private final Map<TopicPartition, Long> committed = new HashMap<>();
   private final Map<String, TableState> tableStates = new HashMap<>();
 
@@ -148,6 +145,7 @@ public final class DeltaSinkTask extends SinkTask {
     this.flushSize = config.flushSize();
     this.flushBytes = config.flushBytes();
     this.flushIntervalMs = config.flushIntervalMs();
+    this.buffer = new RecordBuffer(flushBytes > 0);
     this.maintenance = Executors.newSingleThreadExecutor();
   }
 
@@ -193,6 +191,7 @@ public final class DeltaSinkTask extends SinkTask {
     this.flushSize = config.flushSize();
     this.flushBytes = config.flushBytes();
     this.flushIntervalMs = config.flushIntervalMs();
+    this.buffer = new RecordBuffer(flushBytes > 0);
     // One credential provider for the whole task: for oauth/entra it mints and refreshes tokens on
     // its own (before expiry); for pat it reads the config token per request. Either way the UC
     // clients just see a Supplier<String> that always yields a valid token.
@@ -226,10 +225,7 @@ public final class DeltaSinkTask extends SinkTask {
     synchronized (lock) {
       // backpressure: refuse to grow the heap past the ceiling. RetriableException makes Connect
       // pause and re-deliver this same batch once flushes drain the buffers.
-      int buffered = 0;
-      for (List<SinkRecord> b : buffers.values()) {
-        buffered += b.size();
-      }
+      int buffered = buffer.totalRows();
       if (buffered + records.size() > maxBufferedRecords) {
         throw new RetriableException(
             "buffered records " + buffered + " + " + records.size()
@@ -237,18 +233,11 @@ public final class DeltaSinkTask extends SinkTask {
       }
       long now = clock.getAsLong();
       for (SinkRecord record : records) {
-        TopicPartition tp = new TopicPartition(record.topic(), record.kafkaPartition());
-        buffers.computeIfAbsent(tp, k -> new ArrayList<>()).add(record);
-        bufferStartMs.putIfAbsent(tp, now);
-        if (flushBytes > 0) {
-          bufferBytes.merge(tp, RecordSizeEstimator.estimate(record), Long::sum);
-        }
+        buffer.add(record, now);
       }
       // early flush: size/bytes thresholds commit ahead of the interval tick
-      for (TopicPartition tp : new ArrayList<>(buffers.keySet())) {
-        boolean bySize = flushSize > 0 && buffers.get(tp).size() >= flushSize;
-        boolean byBytes = flushBytes > 0 && bufferBytes.getOrDefault(tp, 0L) >= flushBytes;
-        if (bySize || byBytes) {
+      for (TopicPartition tp : buffer.partitions()) {
+        if (buffer.tripped(tp, flushSize, flushBytes)) {
           flush(tp);
         }
       }
@@ -259,7 +248,7 @@ public final class DeltaSinkTask extends SinkTask {
   private void flushOnInterval() {
     synchronized (lock) {
       try {
-        for (TopicPartition tp : new ArrayList<>(buffers.keySet())) {
+        for (TopicPartition tp : buffer.partitions()) {
           flush(tp);
         }
       } catch (Exception e) {
@@ -273,7 +262,7 @@ public final class DeltaSinkTask extends SinkTask {
   public Map<TopicPartition, OffsetAndMetadata> preCommit(
       Map<TopicPartition, OffsetAndMetadata> currentOffsets) {
     synchronized (lock) {
-      for (TopicPartition tp : new ArrayList<>(buffers.keySet())) {
+      for (TopicPartition tp : buffer.partitions()) {
         flush(tp);
       }
       Map<TopicPartition, OffsetAndMetadata> safe = new HashMap<>();
@@ -286,39 +275,21 @@ public final class DeltaSinkTask extends SinkTask {
 
   /** Commit one topic-partition's buffer as a single Delta transaction. Caller holds {@code lock}. */
   private void flush(TopicPartition tp) {
-    List<SinkRecord> batch = buffers.get(tp);
+    List<SinkRecord> batch = buffer.rows(tp);
     if (batch == null || batch.isEmpty()) {
       return;
     }
     long lastOffset = batch.get(batch.size() - 1).kafkaOffset();
 
-    // Reference schema = the first record carrying a usable (non-null Struct) value. Pinning it to
-    // batch.get(0) would route the whole buffer to the DLQ when a poison/tombstone row sits at the
-    // head; scanning for the first good row keeps the valid rows behind it.
-    Schema refSchema = null;
-    for (SinkRecord record : batch) {
-      if (record.value() instanceof Struct && record.valueSchema() != null) {
-        refSchema = record.valueSchema();
-        break;
-      }
+    // Split into writable rows (Struct values on a single reference schema) and poison. reportBad
+    // routes poison to the DLQ (the commit then advances the offset past it), or fails the task when
+    // no DLQ reporter is configured -- the offset never advances over poison silently.
+    PoisonPartitioner split = PoisonPartitioner.of(batch);
+    for (SinkRecord bad : split.poison) {
+      reportBad(bad, new ConnectException("poison record: non-Struct/null value or schema mismatch"));
     }
-
-    // Partition the buffer: rows with a null/non-Struct value or a schema differing from the
-    // reference are poison. reportBad routes them to the DLQ (the commit then advances the offset
-    // past them), or fails the task when no DLQ reporter is configured -- the offset never advances
-    // over poison silently.
-    List<SinkRecord> good = new ArrayList<>(batch.size());
-    for (SinkRecord record : batch) {
-      boolean ok =
-          record.value() instanceof Struct
-              && refSchema != null
-              && refSchema.equals(record.valueSchema());
-      if (ok) {
-        good.add(record);
-      } else {
-        reportBad(record, new ConnectException("poison record: non-Struct/null value or schema mismatch"));
-      }
-    }
+    Schema refSchema = split.refSchema;
+    List<SinkRecord> good = split.good;
 
     if (good.isEmpty()) {
       // everything was skipped; still advance/clear so the partition makes progress.
@@ -424,9 +395,7 @@ public final class DeltaSinkTask extends SinkTask {
   /** Advance the committed offset past the flushed buffer and clear per-partition bookkeeping. */
   private void commitFlushed(TopicPartition tp, long lastOffset) {
     committed.put(tp, lastOffset + 1);
-    buffers.get(tp).clear();
-    bufferStartMs.remove(tp);
-    bufferBytes.remove(tp);
+    buffer.clear(tp);
   }
 
   /** Resolve (and cache) the write state for a topic's target table. */
@@ -513,9 +482,9 @@ public final class DeltaSinkTask extends SinkTask {
       maint = maintenance;
       flushScheduler = null;
       maintenance = null;
-      buffers.clear();
-      bufferStartMs.clear();
-      bufferBytes.clear();
+      if (buffer != null) {
+        buffer.clearAll();
+      }
       tableStates.clear();
     }
     // Drain the executors OUTSIDE the lock: awaitTermination can block up to 30s while async
