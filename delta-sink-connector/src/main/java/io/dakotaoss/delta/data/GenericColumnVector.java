@@ -4,22 +4,21 @@ import io.delta.kernel.data.ArrayValue;
 import io.delta.kernel.data.ColumnVector;
 import io.delta.kernel.data.MapValue;
 import io.delta.kernel.types.DataType;
-
 import java.math.BigDecimal;
 
 /**
  * In-memory {@link ColumnVector} for one column of a write batch. Four shapes:
  *
  * <ul>
- *   <li>Leaf: {@code Object[]} of values already in Kernel's physical representation ({@code Integer},
- *       {@code Long}, {@code Double}, {@code Float}, {@code Short}, {@code Byte}, {@code Boolean},
- *       {@code String}, {@code byte[]}, {@code BigDecimal}); {@code null} is SQL NULL.</li>
- *   <li>Struct: one child vector per field plus a per-row null flag, read via {@link #getChild(int)}.
- *       Carries nested CDC envelopes (e.g. Debezium before/after).</li>
- *   <li>Array: one flat element child vector plus per-row offsets and a per-row null flag;
- *       {@link #getArray(int)} returns an {@link ArrayValue} over the row's element slice.</li>
- *   <li>Map: key + value child vectors plus per-row offsets and a per-row null flag;
- *       {@link #getMap(int)} returns a {@link MapValue} over the row's key/value slices.</li>
+ *   <li>Leaf: {@code Object[]} of values already in Kernel's physical representation ({@code
+ *       Integer}, {@code Long}, {@code Double}, {@code Float}, {@code Short}, {@code Byte}, {@code
+ *       Boolean}, {@code String}, {@code byte[]}, {@code BigDecimal}); {@code null} is SQL NULL.
+ *   <li>Struct: one child vector per field plus a per-row null flag, read via {@link
+ *       #getChild(int)}. Carries nested CDC envelopes (e.g. Debezium before/after).
+ *   <li>Array: one flat element child vector plus per-row offsets and a per-row null flag; {@link
+ *       #getArray(int)} returns an {@link ArrayValue} over the row's element slice.
+ *   <li>Map: key + value child vectors plus per-row offsets and a per-row null flag; {@link
+ *       #getMap(int)} returns a {@link MapValue} over the row's key/value slices.
  * </ul>
  */
 public final class GenericColumnVector implements ColumnVector {

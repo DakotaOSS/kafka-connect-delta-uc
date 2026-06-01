@@ -1,13 +1,13 @@
 package io.dakotaoss.delta.uc;
 
+import io.dakotaoss.delta.data.Iters;
+import io.dakotaoss.delta.util.Redact;
 import io.delta.kernel.commit.CatalogCommitter;
 import io.delta.kernel.commit.CommitFailedException;
 import io.delta.kernel.commit.CommitMetadata;
 import io.delta.kernel.commit.CommitResponse;
 import io.delta.kernel.commit.PublishFailedException;
 import io.delta.kernel.commit.PublishMetadata;
-import io.dakotaoss.delta.data.Iters;
-import io.dakotaoss.delta.util.Redact;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.actions.CommitInfo;
@@ -37,13 +37,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Delta Kernel {@link Committer} that coordinates commits through Unity Catalog so an external engine
- * can write to a <b>catalog-managed</b> Delta table.
+ * Delta Kernel {@link Committer} that coordinates commits through Unity Catalog so an external
+ * engine can write to a <b>catalog-managed</b> Delta table.
  *
  * <p>Kernel's default committer only writes the filesystem {@code _delta_log} and refuses
  * catalog-managed tables. For a catalog-managed table the commit must be ratified by UC: the writer
- * stages the commit file under {@code _delta_log/_staged_commits/} and asks UC to register it at the
- * target version (first-writer-wins; losers get a conflict to retry).
+ * stages the commit file under {@code _delta_log/_staged_commits/} and asks UC to register it at
+ * the target version (first-writer-wins; losers get a conflict to retry).
  *
  * <p>The UC Delta commits REST API is delegated to delta-storage's {@link UCTokenBasedRestClient},
  * which wraps the Unity Catalog client SDK. This class adapts that onto Kernel's {@link Committer}
@@ -57,13 +57,17 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
   private final String tableId;
   private final URI tableUri;
   private final Configuration hadoopConf;
-  // Highest version this committer has backfilled to the published log; told to UC on the next commit
-  // so getCommits stops returning already-published commits. Written on the async maintenance thread
-  // (publish) and read on the commit thread -> atomic. A stale read only widens UC's prune hint, which
+  // Highest version this committer has backfilled to the published log; told to UC on the next
+  // commit
+  // so getCommits stops returning already-published commits. Written on the async maintenance
+  // thread
+  // (publish) and read on the commit thread -> atomic. A stale read only widens UC's prune hint,
+  // which
   // is harmless, so plain get/accumulate (no lock) is enough.
   final AtomicLong highestPublishedVersion = new AtomicLong(-1);
   // Per-commit metrics supplied by the writer immediately before commit; consumed once so the
-  // emitted commitInfo carries operationMetrics. -1 = not supplied (pass actions through unchanged).
+  // emitted commitInfo carries operationMetrics. -1 = not supplied (pass actions through
+  // unchanged).
   long pendingNumRows = -1;
   private long pendingNumFiles = -1;
   private long pendingNumBytes = -1;
@@ -71,11 +75,12 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
   /**
    * @param workspaceUrl UC REST base, e.g. https://adb-xxxx.azuredatabricks.net
    * @param token bearer token supplier (PAT or AAD access token) for a principal with EXTERNAL USE
-   *     SCHEMA; read per request so a re-minted token is picked up and no extra durable copy is held
+   *     SCHEMA; read per request so a re-minted token is picked up and no extra durable copy is
+   *     held
    * @param tableId UC table id (the {@code table_id} from GET .../tables)
    * @param tableStorageLocation the table's {@code abfss://} storage location
-   * @param hadoopConf Hadoop config wiring the per-host {@code VendedSasTokenProvider} (the SAS itself
-   *     lives in {@code VendedSasStore}, not here); used to stat the staged commit file
+   * @param hadoopConf Hadoop config wiring the per-host {@code VendedSasTokenProvider} (the SAS
+   *     itself lives in {@code VendedSasStore}, not here); used to stat the staged commit file
    */
   public UnityCatalogCommitter(
       String workspaceUrl,
@@ -91,7 +96,9 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
             workspaceUrl, new BearerTokenProvider(token), Collections.emptyMap());
   }
 
-  /** Convenience for tests / fixed tokens; production passes a {@link Supplier} reading the config. */
+  /**
+   * Convenience for tests / fixed tokens; production passes a {@link Supplier} reading the config.
+   */
   public UnityCatalogCommitter(
       String workspaceUrl,
       String token,
@@ -101,7 +108,8 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
     this(workspaceUrl, () -> token, tableId, tableStorageLocation, hadoopConf);
   }
 
-  // visible for tests: inject a UCClient (e.g. a fake) instead of opening a real UCTokenBasedRestClient.
+  // visible for tests: inject a UCClient (e.g. a fake) instead of opening a real
+  // UCTokenBasedRestClient.
   UnityCatalogCommitter(
       String tableId, String tableStorageLocation, Configuration hadoopConf, UCClient ucClient) {
     this.tableId = tableId;
@@ -110,7 +118,10 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
     this.ucClient = ucClient;
   }
 
-  /** What UC knows about a table's log: the ratified (staged, not-yet-published) commits + latest version. */
+  /**
+   * What UC knows about a table's log: the ratified (staged, not-yet-published) commits + latest
+   * version.
+   */
   public static final class CatalogState {
     public final List<ParsedLogData> commits;
     public final long maxVersion;
@@ -122,9 +133,10 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
   }
 
   /**
-   * Fetch the catalog's view of the table in one call: the ratified commit files (which the snapshot
-   * read needs via {@code SnapshotBuilder.withLogData}, since they are staged and not yet published to
-   * the numbered {@code _delta_log}) and the latest table version ({@code withMaxCatalogVersion}).
+   * Fetch the catalog's view of the table in one call: the ratified commit files (which the
+   * snapshot read needs via {@code SnapshotBuilder.withLogData}, since they are staged and not yet
+   * published to the numbered {@code _delta_log}) and the latest table version ({@code
+   * withMaxCatalogVersion}).
    */
   public CatalogState catalogState() {
     try {
@@ -148,16 +160,19 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
       commits.sort(java.util.Comparator.comparingLong(ParsedLogData::getVersion));
       return new CatalogState(commits, resp.getLatestTableVersion());
     } catch (Exception e) {
-      // Redact and drop the raw cause: UC/ABFS error text can carry a vended SAS or bearer token, and
-      // this propagates from stateFor() (outside flush's redacting catch) to Connect's task-failure log.
+      // Redact and drop the raw cause: UC/ABFS error text can carry a vended SAS or bearer token,
+      // and
+      // this propagates from stateFor() (outside flush's redacting catch) to Connect's task-failure
+      // log.
       throw new RuntimeException("UC getCommits failed for " + tableId + ": " + Redact.message(e));
     }
   }
 
   /**
    * Backfill ratified commits to the published {@code _delta_log} so subsequent reads don't have to
-   * replay an unbounded set of staged catalog commits. Kernel calls this via {@code Snapshot.publish}
-   * after a commit; copies each staged commit file to its numbered {@code NN...N.json}.
+   * replay an unbounded set of staged catalog commits. Kernel calls this via {@code
+   * Snapshot.publish} after a commit; copies each staged commit file to its numbered {@code
+   * NN...N.json}.
    */
   @Override
   public void publish(Engine engine, PublishMetadata publishMetadata) {
@@ -199,7 +214,9 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
     String stagedPath = commitMetadata.generateNewStagedCommitFilePath();
     try {
       // 1. Stage: write the finalized actions (enriched commit info) under _staged_commits/.
-      engine.getJsonHandler().writeJsonFileAtomically(stagedPath, enrich(finalizedActions, commitMetadata), false);
+      engine
+          .getJsonHandler()
+          .writeJsonFileAtomically(stagedPath, enrich(finalizedActions, commitMetadata), false);
 
       // 2. Stat the staged file - UC's commit payload needs its size + timestamp.
       FileSystem fs = FileSystem.get(URI.create(stagedPath), hadoopConf);
@@ -220,7 +237,8 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
           Optional.empty(), // protocol (append: unchanged)
           Optional.empty()); // uniform (Iceberg)
 
-      // Log the UC table id (a UUID), never stagedPath: it's an abfss:// location disclosing layout.
+      // Log the UC table id (a UUID), never stagedPath: it's an abfss:// location disclosing
+      // layout.
       LOG.info("UC ratified commit v{} for table {}", version, tableId);
 
       io.delta.kernel.utils.FileStatus kernelStatus =
@@ -228,9 +246,12 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
       return new CommitResponse(ParsedDeltaData.forFileStatus(kernelStatus));
 
     } catch (io.delta.storage.commit.CommitFailedException e) {
-      // An auth (401) failure is not transient -- retrying the same expired/revoked/skewed token just
-      // storms in Kernel's commitWithRetry. Force it non-retryable so the task fails fast and the next
-      // flush re-resolves (re-vending creds + re-minting the token), even if the SDK marked it retryable.
+      // An auth (401) failure is not transient -- retrying the same expired/revoked/skewed token
+      // just
+      // storms in Kernel's commitWithRetry. Force it non-retryable so the task fails fast and the
+      // next
+      // flush re-resolves (re-vending creds + re-minting the token), even if the SDK marked it
+      // retryable.
       // Redact: UC/ABFS error text can carry a vended SAS or bearer token.
       boolean retryable = e.getRetryable() && !isAuthFailure(e);
       throw new CommitFailedException(retryable, e.getConflict(), Redact.text(e.getMessage()), e);
@@ -250,7 +271,9 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
       String m = c.getMessage();
       if (m != null) {
         String s = m.toLowerCase(java.util.Locale.ROOT);
-        if (s.contains("401") || s.contains("unauthorized") || s.contains("token is expired")
+        if (s.contains("401")
+            || s.contains("unauthorized")
+            || s.contains("token is expired")
             || s.contains("invalid_client")) {
           return true;
         }
@@ -263,8 +286,9 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
   }
 
   /**
-   * Per-commit write metrics, set by the writer immediately before {@code commit} and consumed once.
-   * Lets the emitted {@code commitInfo} carry {@code operationMetrics} (Kernel leaves them empty).
+   * Per-commit write metrics, set by the writer immediately before {@code commit} and consumed
+   * once. Lets the emitted {@code commitInfo} carry {@code operationMetrics} (Kernel leaves them
+   * empty).
    */
   public void setPendingMetrics(long numRows, long numFiles, long numBytes) {
     this.pendingNumRows = numRows;
@@ -274,9 +298,9 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
 
   /**
    * Replace Kernel's bare commit-info action with one that carries {@code operationParameters},
-   * {@code operationMetrics}, and {@code isBlindAppend}. Kernel's low-level writer leaves these empty;
-   * Spark-written tables populate them, so match that for a consistent Delta history. Pass-through
-   * when the writer supplied no metrics.
+   * {@code operationMetrics}, and {@code isBlindAppend}. Kernel's low-level writer leaves these
+   * empty; Spark-written tables populate them, so match that for a consistent Delta history.
+   * Pass-through when the writer supplied no metrics.
    */
   CloseableIterator<Row> enrich(CloseableIterator<Row> actions, CommitMetadata commitMetadata) {
     if (pendingNumRows < 0) {
@@ -287,7 +311,9 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
       while (actions.hasNext()) {
         Row row = actions.next();
         if (!row.isNullAt(SingleAction.COMMIT_INFO_ORDINAL)) {
-          out.add(SingleAction.createCommitInfoSingleAction(enrichedCommitInfo(commitMetadata).toRow()));
+          out.add(
+              SingleAction.createCommitInfoSingleAction(
+                  enrichedCommitInfo(commitMetadata).toRow()));
         } else {
           out.add(row);
         }

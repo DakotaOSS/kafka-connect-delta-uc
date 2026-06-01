@@ -12,7 +12,8 @@ import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.junit.jupiter.api.Test;
 
-// flush.bytes accounting must include array/map payloads, not silently treat them as a flat 8 bytes.
+// flush.bytes accounting must include array/map payloads, not silently treat them as a flat 8
+// bytes.
 class RecordSizeEstimatorCollectionTest {
 
   private static SinkRecord rec(Schema vs, Struct value) {
@@ -50,6 +51,7 @@ class RecordSizeEstimatorCollectionTest {
             .build();
     Struct small = new Struct(vs).put("nums", Arrays.asList(1));
     Struct big = new Struct(vs).put("nums", Arrays.asList(1, 2, 3, 4, 5));
-    assertTrue(RecordSizeEstimator.estimate(rec(vs, big)) > RecordSizeEstimator.estimate(rec(vs, small)));
+    assertTrue(
+        RecordSizeEstimator.estimate(rec(vs, big)) > RecordSizeEstimator.estimate(rec(vs, small)));
   }
 }

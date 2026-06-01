@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.dakotaoss.delta.DeltaSinkTask.TableState;
 import io.dakotaoss.delta.model.TableTarget;
-import io.dakotaoss.delta.uc.TableResolver;
 import io.dakotaoss.delta.uc.UnityCatalogCommitter;
 import io.dakotaoss.delta.writer.DeltaKernelWriter;
 import io.dakotaoss.delta.writer.EngineProvider;
@@ -43,7 +42,8 @@ class DeltaSinkTaskConcurrencyTest {
   private static final Schema VALUE_SCHEMA =
       SchemaBuilder.struct().field("id", Schema.INT32_SCHEMA).build();
 
-  // A SAS like a real ABFS 403 carries; the async-maintenance failure path must strip it before logging.
+  // A SAS like a real ABFS 403 carries; the async-maintenance failure path must strip it before
+  // logging.
   private static final String SAS_LEAK =
       "Publish failed: abfss://c@acct.dfs.core.windows.net/t?sig=LEAK&se=2026-01-01";
 
@@ -52,7 +52,8 @@ class DeltaSinkTaskConcurrencyTest {
     props.put("name", "delta-sink-test");
     props.put(DeltaSinkConfig.WORKSPACE_URL, "https://example.invalid");
     props.put(DeltaSinkConfig.TOKEN, "unused");
-    props.put(DeltaSinkConfig.FLUSH_SIZE, "1000000"); // rows dial effectively off: keep rows buffered
+    props.put(
+        DeltaSinkConfig.FLUSH_SIZE, "1000000"); // rows dial effectively off: keep rows buffered
     return new DeltaSinkConfig(props);
   }
 
@@ -63,7 +64,11 @@ class DeltaSinkTaskConcurrencyTest {
 
   private static TableTarget catalogTarget(String topic) {
     return new TableTarget(
-        "local." + topic, "file:/unused", "tbl-id", Collections.emptyList(), Collections.emptyMap());
+        "local." + topic,
+        "file:/unused",
+        "tbl-id",
+        Collections.emptyList(),
+        Collections.emptyMap());
   }
 
   // ---- backpressure ---------------------------------------------------------------------------
@@ -73,7 +78,9 @@ class DeltaSinkTaskConcurrencyTest {
     DeltaSinkTask task =
         new DeltaSinkTask(
             config(),
-            t -> new TableTarget("local." + t, "file:/unused", Collections.emptyList(), Collections.emptyMap()),
+            t ->
+                new TableTarget(
+                    "local." + t, "file:/unused", Collections.emptyList(), Collections.emptyMap()),
             EngineProvider.hadoop(),
             new DeltaKernelWriter(),
             "delta-sink-test");
@@ -94,7 +101,9 @@ class DeltaSinkTaskConcurrencyTest {
     DeltaSinkTask task =
         new DeltaSinkTask(
             config(),
-            t -> new TableTarget("local." + t, "file:/unused", Collections.emptyList(), Collections.emptyMap()),
+            t ->
+                new TableTarget(
+                    "local." + t, "file:/unused", Collections.emptyList(), Collections.emptyMap()),
             EngineProvider.hadoop(),
             new DeltaKernelWriter(),
             "delta-sink-test");
@@ -106,8 +115,10 @@ class DeltaSinkTaskConcurrencyTest {
 
   // ---- credential-TTL re-resolve --------------------------------------------------------------
 
-  // Writer that bypasses the real Delta protocol: appendToSnapshot returns null so the task takes the
-  // catalog-managed branch, completes the flush, and advances the offset without fabricating a Kernel
+  // Writer that bypasses the real Delta protocol: appendToSnapshot returns null so the task takes
+  // the
+  // catalog-managed branch, completes the flush, and advances the offset without fabricating a
+  // Kernel
   // commit result (TransactionCommitResult requires a non-null TransactionReport).
   private static class NullResultWriter extends DeltaKernelWriter {
     @Override
@@ -131,7 +142,8 @@ class DeltaSinkTaskConcurrencyTest {
     Engine engine = EngineProvider.hadoop().engineFor(catalogTarget("orders"));
     return topic -> {
       builds.incrementAndGet();
-      return new TableState(catalogTarget(topic), engine, inertCommitter(), null, task.clockForTest());
+      return new TableState(
+          catalogTarget(topic), engine, inertCommitter(), null, task.clockForTest());
     };
   }
 
@@ -139,7 +151,12 @@ class DeltaSinkTaskConcurrencyTest {
   void staleCatalogStateReResolvesPastRefreshTtl() {
     AtomicLong now = new AtomicLong(0);
     DeltaSinkTask task =
-        new DeltaSinkTask(config(), t -> null, EngineProvider.hadoop(), new NullResultWriter(), "delta-sink-test");
+        new DeltaSinkTask(
+            config(),
+            t -> null,
+            EngineProvider.hadoop(),
+            new NullResultWriter(),
+            "delta-sink-test");
     task.setClockForTest(now::get);
     AtomicInteger builds = new AtomicInteger();
     task.setStateBuilderForTest(countingBuilder(task, builds));
@@ -180,16 +197,22 @@ class DeltaSinkTaskConcurrencyTest {
     AtomicReference<String> logged = new AtomicReference<>();
     DeltaSinkTask task =
         new DeltaSinkTask(
-            config(), t -> null, EngineProvider.hadoop(), new FailingMaintainWriter(), "delta-sink-test");
+            config(),
+            t -> null,
+            EngineProvider.hadoop(),
+            new FailingMaintainWriter(),
+            "delta-sink-test");
     task.setAsyncMaintenanceErrorSinkForTest(logged::set);
     Engine engine = EngineProvider.hadoop().engineFor(catalogTarget("orders"));
 
     task.runMaintenance(engine, null, "orders");
 
     String text = logged.get();
-    assertTrue(text != null && text.contains("orders"), "failure should be logged for the topic: " + text);
+    assertTrue(
+        text != null && text.contains("orders"), "failure should be logged for the topic: " + text);
     assertFalse(text.contains("sig=LEAK"), "SAS must be redacted before logging: " + text);
-    assertFalse(text.contains("acct.dfs.core.windows.net"), "storage host must be redacted: " + text);
+    assertFalse(
+        text.contains("acct.dfs.core.windows.net"), "storage host must be redacted: " + text);
     task.stop();
   }
 }

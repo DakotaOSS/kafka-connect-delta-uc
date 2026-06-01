@@ -28,7 +28,8 @@ class UcTableResolverTest {
   private HttpServer serverWith(String tableJson, String credsJson) throws IOException {
     HttpServer s = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     s.createContext("/api/2.1/unity-catalog/tables/", ex -> respond(ex, tableJson));
-    s.createContext("/api/2.1/unity-catalog/temporary-table-credentials", ex -> respond(ex, credsJson));
+    s.createContext(
+        "/api/2.1/unity-catalog/temporary-table-credentials", ex -> respond(ex, credsJson));
     s.start();
     return s;
   }
@@ -43,7 +44,8 @@ class UcTableResolverTest {
 
   @Test
   void resolveFailureDropsRawCause() throws Exception {
-    // resolve()'s catch must not chain the raw throwable: a future ABFS exception there could embed a
+    // resolve()'s catch must not chain the raw throwable: a future ABFS exception there could embed
+    // a
     // SAS, and Connect logs the whole cause chain. Keep only the redacted message, no cause.
     HttpServer s = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     s.createContext(
@@ -60,7 +62,9 @@ class UcTableResolverTest {
       String base = "http://127.0.0.1:" + s.getAddress().getPort();
       UcTableResolver resolver =
           new UcTableResolver(
-              new UnityCatalogClient(base, "tok"), "main.ingestion.${topic}", Collections.emptyList());
+              new UnityCatalogClient(base, "tok"),
+              "main.ingestion.${topic}",
+              Collections.emptyList());
       ConnectException ex = assertThrows(ConnectException.class, () -> resolver.resolve("orders"));
       assertNull(ex.getCause(), "raw cause must be dropped so it can't be logged unredacted");
       assertTrue(ex.getMessage().contains("Failed to resolve UC table main.ingestion.orders"));
@@ -80,7 +84,9 @@ class UcTableResolverTest {
       String base = "http://127.0.0.1:" + s.getAddress().getPort();
       UcTableResolver resolver =
           new UcTableResolver(
-              new UnityCatalogClient(base, "tok"), "main.ingestion.${topic}", Collections.emptyList());
+              new UnityCatalogClient(base, "tok"),
+              "main.ingestion.${topic}",
+              Collections.emptyList());
       TableTarget t = resolver.resolve("orders_v2");
       assertEquals("main.ingestion.orders_v2", t.fullName());
       assertEquals("abfss://c@acct.dfs.core.windows.net/t", t.tablePath());
@@ -89,7 +95,8 @@ class UcTableResolverTest {
           VendedSasTokenProvider.class.getName(),
           t.hadoopConfig().get("fs.azure.sas.token.provider.type.acct.dfs.core.windows.net"));
       assertEquals(
-          "sig=zz", VendedSasStore.instance().sasFor("acct.dfs.core.windows.net", "c", "t/_delta_log/0"));
+          "sig=zz",
+          VendedSasStore.instance().sasFor("acct.dfs.core.windows.net", "c", "t/_delta_log/0"));
     } finally {
       s.stop(0);
     }
@@ -105,7 +112,9 @@ class UcTableResolverTest {
       String base = "http://127.0.0.1:" + s.getAddress().getPort();
       UcTableResolver resolver =
           new UcTableResolver(
-              new UnityCatalogClient(base, "tok"), "main.ingestion.${topic}", Collections.emptyList());
+              new UnityCatalogClient(base, "tok"),
+              "main.ingestion.${topic}",
+              Collections.emptyList());
       TableTarget t = resolver.resolve("events");
       assertTrue(t.hadoopConfig().isEmpty(), "non-azure creds should not set ABFS keys");
     } finally {
@@ -120,7 +129,9 @@ class UcTableResolverTest {
       String base = "http://127.0.0.1:" + s.getAddress().getPort();
       UcTableResolver resolver =
           new UcTableResolver(
-              new UnityCatalogClient(base, "tok"), "main.ingestion.${topic}", Collections.emptyList());
+              new UnityCatalogClient(base, "tok"),
+              "main.ingestion.${topic}",
+              Collections.emptyList());
       assertThrows(ConnectException.class, () -> resolver.resolve("orders"));
     } finally {
       s.stop(0);
@@ -134,7 +145,8 @@ class UcTableResolverTest {
     // a topic that is already a valid identifier substitutes unchanged
     assertEquals(
         "main.ingestion.orders_v2",
-        UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), "orders_v2"));
+        UcTableResolver.resolveName(
+            "main.ingestion.${topic}", Collections.emptyMap(), "orders_v2"));
     assertEquals(
         "main.ingestion.orders2",
         UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), "orders2"));
@@ -142,12 +154,14 @@ class UcTableResolverTest {
 
   @Test
   void rejectsOutOfSetCharactersInsteadOfCollapsing() {
-    // orders.eu / orders/eu / orders-eu all used to fold to the same orders_eu (non-injective): under
+    // orders.eu / orders/eu / orders-eu all used to fold to the same orders_eu (non-injective):
+    // under
     // an untrusted regex subscription a crafted topic could collide onto a victim's table. Reject.
     for (String topic : new String[] {"orders-eu", "orders/eu", "orders.eu", "orders eu", "a$b"}) {
       assertThrows(
           ConnectException.class,
-          () -> UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), topic),
+          () ->
+              UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), topic),
           "out-of-set topic must be rejected, not collapsed: " + topic);
     }
   }
@@ -157,7 +171,9 @@ class UcTableResolverTest {
     String longTopic = new String(new char[300]).replace('\0', 'a'); // 300 chars, valid charset
     assertThrows(
         ConnectException.class,
-        () -> UcTableResolver.resolveName("main.ingestion.${topic}", Collections.emptyMap(), longTopic));
+        () ->
+            UcTableResolver.resolveName(
+                "main.ingestion.${topic}", Collections.emptyMap(), longTopic));
   }
 
   @Test
@@ -182,7 +198,8 @@ class UcTableResolverTest {
         "analytics.cdc.orders",
         UcTableResolver.resolveName("main.ingestion.${topic}", map, "orders"));
     assertEquals(
-        "main.ingestion.users", UcTableResolver.resolveName("main.ingestion.${topic}", map, "users"));
+        "main.ingestion.users",
+        UcTableResolver.resolveName("main.ingestion.${topic}", map, "users"));
   }
 
   @Test
@@ -201,7 +218,8 @@ class UcTableResolverTest {
 
   @Test
   void rejectsOversizedSegmentIndex() {
-    // index > Integer.MAX_VALUE must surface as a clean ConnectException, not a raw NumberFormatException
+    // index > Integer.MAX_VALUE must surface as a clean ConnectException, not a raw
+    // NumberFormatException
     assertThrows(
         ConnectException.class,
         () ->
@@ -235,6 +253,7 @@ class UcTableResolverTest {
         UcTableResolver.resolveName(cfg.tableNameFormat(), cfg.topicToTable(), "legacy"));
     assertEquals(
         "bronze.sys.customers",
-        UcTableResolver.resolveName(cfg.tableNameFormat(), cfg.topicToTable(), "sys.dbo.customers"));
+        UcTableResolver.resolveName(
+            cfg.tableNameFormat(), cfg.topicToTable(), "sys.dbo.customers"));
   }
 }

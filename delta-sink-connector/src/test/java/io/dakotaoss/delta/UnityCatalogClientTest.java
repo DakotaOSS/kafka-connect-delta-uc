@@ -97,7 +97,8 @@ class UnityCatalogClientTest {
         conf.get("fs.azure.sas.token.provider.type." + host));
     assertEquals("true", conf.get("fs.azure.account.hns.enabled." + host));
     // the SAS must NOT be in the config, and the global FS-cache disable must be gone
-    assertNull(conf.get("fs.azure.sas.fixed.token." + host), "SAS must not be in the Configuration");
+    assertNull(
+        conf.get("fs.azure.sas.fixed.token." + host), "SAS must not be in the Configuration");
     assertNull(conf.get("fs.abfss.impl.disable.cache"), "must not disable the FS cache globally");
     // instead the SAS lives in the store, scoped to the table dir, and vends for paths under it
     assertEquals(
@@ -111,12 +112,14 @@ class UnityCatalogClientTest {
     // (re-mint near expiry) is picked up without rebuilding the client.
     java.util.concurrent.atomic.AtomicReference<String> tok =
         new java.util.concurrent.atomic.AtomicReference<>("t1");
-    UnityCatalogClient client = new UnityCatalogClient(baseUrl, (java.util.function.Supplier<String>) tok::get);
+    UnityCatalogClient client =
+        new UnityCatalogClient(baseUrl, (java.util.function.Supplier<String>) tok::get);
     client.getTable("main.ingestion.orders");
     assertEquals("Bearer t1", lastAuthHeader);
     tok.set("t2");
     client.getTable("main.ingestion.orders");
-    assertEquals("Bearer t2", lastAuthHeader, "token must be re-read from the supplier each request");
+    assertEquals(
+        "Bearer t2", lastAuthHeader, "token must be re-read from the supplier each request");
   }
 
   @Test

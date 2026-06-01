@@ -6,14 +6,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Wraps a {@link TokenMinter} with a cache that refreshes <b>proactively</b>, well before expiry, so
- * callers never see an expired token and never trip an auth-retry storm. Refresh is single-flight
- * (concurrent callers share one mint under the lock); a mint failure while the cached token is still
- * valid is tolerated — serve the cached token and try again next call — so a transient IdP blip is
- * invisible. Thread-safe.
+ * Wraps a {@link TokenMinter} with a cache that refreshes <b>proactively</b>, well before expiry,
+ * so callers never see an expired token and never trip an auth-retry storm. Refresh is
+ * single-flight (concurrent callers share one mint under the lock); a mint failure while the cached
+ * token is still valid is tolerated — serve the cached token and try again next call — so a
+ * transient IdP blip is invisible. Thread-safe.
  *
- * <p>Refresh fires once {@code REFRESH_FRACTION} of the token's stated lifetime has elapsed, leaving a
- * cushion (never below {@code MIN_CUSHION_MS}) for clock skew, mint latency, and retries.
+ * <p>Refresh fires once {@code REFRESH_FRACTION} of the token's stated lifetime has elapsed,
+ * leaving a cushion (never below {@code MIN_CUSHION_MS}) for clock skew, mint latency, and retries.
  */
 public final class RefreshingCredential implements CredentialProvider {
 
@@ -36,7 +36,8 @@ public final class RefreshingCredential implements CredentialProvider {
   }
 
   // visible for tests: inject a clock + cushion params so refresh timing is deterministic.
-  RefreshingCredential(TokenMinter minter, LongSupplier clockMs, double refreshFraction, long minCushionMs) {
+  RefreshingCredential(
+      TokenMinter minter, LongSupplier clockMs, double refreshFraction, long minCushionMs) {
     this.minter = minter;
     this.clockMs = clockMs;
     this.refreshFraction = refreshFraction;

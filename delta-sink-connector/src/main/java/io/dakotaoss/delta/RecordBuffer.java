@@ -9,18 +9,20 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 /**
- * Per-partition flush buffer: the rows queued for each topic-partition plus the running byte total and
- * first-arrival timestamp the byte/interval flush dials read. Methods are {@code synchronized} so the
- * map structure is safe when {@code flush.concurrency>1} runs per-table commit tasks that clear
- * different partitions in parallel; the WAN commit happens outside these methods, so locking the buffer
- * never serializes a commit. A given partition's row list is only handled by its own table's task.
+ * Per-partition flush buffer: the rows queued for each topic-partition plus the running byte total
+ * and first-arrival timestamp the byte/interval flush dials read. Methods are {@code synchronized}
+ * so the map structure is safe when {@code flush.concurrency>1} runs per-table commit tasks that
+ * clear different partitions in parallel; the WAN commit happens outside these methods, so locking
+ * the buffer never serializes a commit. A given partition's row list is only handled by its own
+ * table's task.
  */
 final class RecordBuffer {
 
   private final Map<TopicPartition, List<SinkRecord>> rows = new HashMap<>();
   private final Map<TopicPartition, Long> startMs = new HashMap<>();
   private final Map<TopicPartition, Long> bytes = new HashMap<>();
-  // estimate bytes only when flush.bytes is enabled -- the estimate isn't free, and with the dial off
+  // estimate bytes only when flush.bytes is enabled -- the estimate isn't free, and with the dial
+  // off
   // nothing reads it.
   private final boolean trackBytes;
 

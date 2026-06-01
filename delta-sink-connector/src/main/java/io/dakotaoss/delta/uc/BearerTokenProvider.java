@@ -7,8 +7,8 @@ import java.util.function.Supplier;
 
 /**
  * {@link TokenProvider} for the catalog-commit path. Hands back a bearer token (Databricks PAT or
- * Entra/AAD access token for the Azure Databricks resource); the UC REST client sets it as
- * {@code Authorization: Bearer}.
+ * Entra/AAD access token for the Azure Databricks resource); the UC REST client sets it as {@code
+ * Authorization: Bearer}.
  *
  * <p>The token is sourced from a {@link Supplier} read on each call, not captured as a long-lived
  * field here, so a re-minted token (refresh near expiry) is picked up without rebuilding the

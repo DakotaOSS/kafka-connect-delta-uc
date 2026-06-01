@@ -42,7 +42,8 @@ class RecordConverterNestedTest {
     Struct afterVal = new Struct(after).put("id", 7).put("name", "bob");
     Struct row = new Struct(envelope).put("after", afterVal);
 
-    FilteredColumnarBatch fb = RecordConverter.toBatch(kernel, envelope, Collections.singletonList(rec(envelope, row)));
+    FilteredColumnarBatch fb =
+        RecordConverter.toBatch(kernel, envelope, Collections.singletonList(rec(envelope, row)));
     ColumnarBatch b = fb.getData();
     assertEquals(1, b.getSize());
 
@@ -79,7 +80,8 @@ class RecordConverterNestedTest {
   void nullTopLevelRecordValueYieldsNullColumns() {
     Schema vs = SchemaBuilder.struct().field("id", Schema.INT32_SCHEMA).build();
     StructType kernel = SchemaMapper.toKernel(vs);
-    ColumnarBatch b = RecordConverter.toBatch(kernel, vs, Collections.singletonList(rec(vs, null))).getData();
+    ColumnarBatch b =
+        RecordConverter.toBatch(kernel, vs, Collections.singletonList(rec(vs, null))).getData();
     assertTrue(b.getColumnVector(0).isNullAt(0));
   }
 
@@ -87,7 +89,8 @@ class RecordConverterNestedTest {
   void rejectsKernelFieldMissingFromConnectSchema() {
     // kernel schema asks for a column the Connect value schema doesn't carry: fail loud, not NPE.
     Schema vs = SchemaBuilder.struct().field("id", Schema.INT32_SCHEMA).build();
-    StructType kernel = new StructType().add("id", IntegerType.INTEGER).add("missing", StringType.STRING);
+    StructType kernel =
+        new StructType().add("id", IntegerType.INTEGER).add("missing", StringType.STRING);
     Struct row = new Struct(vs).put("id", 1);
     assertThrows(
         DataException.class,
@@ -100,16 +103,21 @@ class RecordConverterNestedTest {
     Schema envelope = SchemaBuilder.struct().field("after", after).build();
     StructType kernel =
         new StructType()
-            .add("after", new StructType().add("id", IntegerType.INTEGER).add("missing", StringType.STRING));
+            .add(
+                "after",
+                new StructType().add("id", IntegerType.INTEGER).add("missing", StringType.STRING));
     Struct row = new Struct(envelope).put("after", new Struct(after).put("id", 1));
     assertThrows(
         DataException.class,
-        () -> RecordConverter.toBatch(kernel, envelope, Collections.singletonList(rec(envelope, row))));
+        () ->
+            RecordConverter.toBatch(
+                kernel, envelope, Collections.singletonList(rec(envelope, row))));
   }
 
   @Test
   void missingFieldMessageRedactsTheFieldName() {
-    // the missing-field name flows into the message through Redact; a SAS-shaped name must be masked.
+    // the missing-field name flows into the message through Redact; a SAS-shaped name must be
+    // masked.
     Schema vs = SchemaBuilder.struct().field("id", Schema.INT32_SCHEMA).build();
     StructType kernel = new StructType().add("sig=leakedsas", StringType.STRING);
     Struct row = new Struct(vs).put("id", 1);
@@ -142,7 +150,9 @@ class RecordConverterNestedTest {
     Struct row = new Struct(scalarEnvelope).put("after", "not a struct");
     assertThrows(
         DataException.class,
-        () -> RecordConverter.toBatch(kernel, scalarEnvelope, Collections.singletonList(rec(scalarEnvelope, row))));
+        () ->
+            RecordConverter.toBatch(
+                kernel, scalarEnvelope, Collections.singletonList(rec(scalarEnvelope, row))));
   }
 
   @Test

@@ -40,11 +40,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Offline behavior tests for the parts of {@link UnityCatalogCommitter} that the env-gated Live tests
- * never assert: commitInfo enrichment (consume-once metrics), and the catalogState sort/dedup +
- * publish backfill paths driven against a fake {@link UCClient} and a local {@code _delta_log}. These
- * exercise Kernel internals (CommitInfo/ParsedCatalogCommitData/PublishMetadata) so a regression on a
- * {@code delta.kernel.version} bump fails here rather than only in the skipped Live suite.
+ * Offline behavior tests for the parts of {@link UnityCatalogCommitter} that the env-gated Live
+ * tests never assert: commitInfo enrichment (consume-once metrics), and the catalogState sort/dedup
+ * + publish backfill paths driven against a fake {@link UCClient} and a local {@code _delta_log}.
+ * These exercise Kernel internals (CommitInfo/ParsedCatalogCommitData/PublishMetadata) so a
+ * regression on a {@code delta.kernel.version} bump fails here rather than only in the skipped Live
+ * suite.
  */
 class UnityCatalogCommitterTest {
 
@@ -73,18 +74,29 @@ class UnityCatalogCommitterTest {
     UnityCatalogCommitter committer = committer("file:/tmp/unused");
     committer.setPendingMetrics(10, 1, 100);
 
-    Row commitInfoRow = SingleAction.createCommitInfoSingleAction(baseCommitInfo(operationParams()).toRow());
+    Row commitInfoRow =
+        SingleAction.createCommitInfoSingleAction(baseCommitInfo(operationParams()).toRow());
     Row nonCommitInfoRow = nonCommitInfoRow();
 
-    List<Row> out = drain(committer.enrich(actions(commitInfoRow, nonCommitInfoRow), commitMetadata(operationParams())));
+    List<Row> out =
+        drain(
+            committer.enrich(
+                actions(commitInfoRow, nonCommitInfoRow), commitMetadata(operationParams())));
 
     assertEquals(2, out.size());
-    // the non-commit-info action is forwarded by identity; the commit-info action is replaced with a
-    // fresh single-action carrying the enriched commit info (its content is asserted directly above).
+    // the non-commit-info action is forwarded by identity; the commit-info action is replaced with
+    // a
+    // fresh single-action carrying the enriched commit info (its content is asserted directly
+    // above).
     assertSame(nonCommitInfoRow, out.get(1));
-    assertFalse(out.get(0).isNullAt(SingleAction.COMMIT_INFO_ORDINAL), "commit-info action must remain present");
-    assertEquals("WRITE", out.get(0).getStruct(SingleAction.COMMIT_INFO_ORDINAL)
-        .getString(CommitInfo.FULL_SCHEMA.indexOf("operation")));
+    assertFalse(
+        out.get(0).isNullAt(SingleAction.COMMIT_INFO_ORDINAL),
+        "commit-info action must remain present");
+    assertEquals(
+        "WRITE",
+        out.get(0)
+            .getStruct(SingleAction.COMMIT_INFO_ORDINAL)
+            .getString(CommitInfo.FULL_SCHEMA.indexOf("operation")));
   }
 
   @Test
@@ -111,13 +123,16 @@ class UnityCatalogCommitterTest {
   // ---- catalogState: ascending sort + already-published dedup ----------------------------------
 
   @Test
-  void catalogStateSortsAscendingAndDropsPublishedCommits(@TempDir java.nio.file.Path tableDir) throws Exception {
+  void catalogStateSortsAscendingAndDropsPublishedCommits(@TempDir java.nio.file.Path tableDir)
+      throws Exception {
     String tableUri = tableDir.toUri().toString();
     String logPath = logPath(tableDir);
-    // v0 was already backfilled to the published log; Kernel reads it directly, so catalogState must
+    // v0 was already backfilled to the published log; Kernel reads it directly, so catalogState
+    // must
     // not also return it as staged log data (that would double-count the version).
     java.nio.file.Files.createDirectories(tableDir.resolve("_delta_log"));
-    Files.write(tableDir.resolve("_delta_log").resolve(String.format("%020d.json", 0L)),
+    Files.write(
+        tableDir.resolve("_delta_log").resolve(String.format("%020d.json", 0L)),
         "{}".getBytes(StandardCharsets.UTF_8));
 
     // UC returns commits newest-first.
@@ -127,7 +142,10 @@ class UnityCatalogCommitterTest {
     newestFirst.add(stagedCommit(logPath, 0));
     UnityCatalogCommitter committer =
         new UnityCatalogCommitter(
-            "table-id", tableUri, new Configuration(), new FakeUCClient(new GetCommitsResponse(newestFirst, 2)));
+            "table-id",
+            tableUri,
+            new Configuration(),
+            new FakeUCClient(new GetCommitsResponse(newestFirst, 2)));
 
     UnityCatalogCommitter.CatalogState state = committer.catalogState();
 
@@ -143,7 +161,8 @@ class UnityCatalogCommitterTest {
   // ---- publish: backfill copies staged commits, skips if already published ---------------------
 
   @Test
-  void publishBackfillsStagedCommitsAndSkipsExisting(@TempDir java.nio.file.Path tableDir) throws Exception {
+  void publishBackfillsStagedCommitsAndSkipsExisting(@TempDir java.nio.file.Path tableDir)
+      throws Exception {
     String logPath = logPath(tableDir);
     java.nio.file.Path logDir = tableDir.resolve("_delta_log");
     Files.createDirectories(logDir);
@@ -158,11 +177,15 @@ class UnityCatalogCommitterTest {
     committer.publish(null, new PublishMetadata(1, logPath, List.of(c0, c1)));
 
     // v0 skip-if-exists: original published bytes preserved, not overwritten with the staged copy.
-    assertEquals("ALREADY-PUBLISHED",
+    assertEquals(
+        "ALREADY-PUBLISHED",
         new String(Files.readAllBytes(logDir.resolve(published0)), StandardCharsets.UTF_8));
     // v1 backfilled to its numbered published name with the staged bytes.
-    assertEquals("staged-1",
-        new String(Files.readAllBytes(logDir.resolve(String.format("%020d.json", 1L))), StandardCharsets.UTF_8));
+    assertEquals(
+        "staged-1",
+        new String(
+            Files.readAllBytes(logDir.resolve(String.format("%020d.json", 1L))),
+            StandardCharsets.UTF_8));
     // highestPublishedVersion advances to the max version copied (told to UC on the next commit).
     assertEquals(1L, committer.highestPublishedVersion.get());
   }
@@ -171,13 +194,18 @@ class UnityCatalogCommitterTest {
 
   @Test
   void authFailureDetectedAnywhereInCauseChain() {
-    assertTrue(UnityCatalogCommitter.isAuthFailure(new RuntimeException("ApiException: 401 Unauthorized")));
+    assertTrue(
+        UnityCatalogCommitter.isAuthFailure(
+            new RuntimeException("ApiException: 401 Unauthorized")));
     assertTrue(
         UnityCatalogCommitter.isAuthFailure(
             new RuntimeException("commit failed", new java.io.IOException("Token is expired"))));
-    assertTrue(UnityCatalogCommitter.isAuthFailure(new RuntimeException("oidc error: invalid_client")));
+    assertTrue(
+        UnityCatalogCommitter.isAuthFailure(new RuntimeException("oidc error: invalid_client")));
     // a real conflict is retryable -- must not be misclassified as auth
-    assertFalse(UnityCatalogCommitter.isAuthFailure(new RuntimeException("version 5 already exists; conflict")));
+    assertFalse(
+        UnityCatalogCommitter.isAuthFailure(
+            new RuntimeException("version 5 already exists; conflict")));
     assertFalse(UnityCatalogCommitter.isAuthFailure(null));
   }
 
@@ -185,7 +213,11 @@ class UnityCatalogCommitterTest {
 
   private static UnityCatalogCommitter committer(String tableStorageLocation) {
     return new UnityCatalogCommitter(
-        "https://workspace.example", "token", "table-id", tableStorageLocation, new Configuration());
+        "https://workspace.example",
+        "token",
+        "table-id",
+        tableStorageLocation,
+        new Configuration());
   }
 
   private static Map<String, String> operationParams() {
@@ -196,21 +228,41 @@ class UnityCatalogCommitterTest {
 
   private static CommitInfo baseCommitInfo(Map<String, String> params) {
     return new CommitInfo(
-        Optional.empty(), 1000L, Optional.of("kernel"), Optional.of("WRITE"),
-        params, Optional.empty(), Optional.of("txn-1"), new HashMap<>());
+        Optional.empty(),
+        1000L,
+        Optional.of("kernel"),
+        Optional.of("WRITE"),
+        params,
+        Optional.empty(),
+        Optional.of("txn-1"),
+        new HashMap<>());
   }
 
-  // version-0 CommitMetadata: read-state absent, new protocol+metadata present, plain protocol so no
+  // version-0 CommitMetadata: read-state absent, new protocol+metadata present, plain protocol so
+  // no
   // in-commit-timestamp is demanded. enrichedCommitInfo only reads getCommitInfo().
   private static CommitMetadata commitMetadata(Map<String, String> params) {
-    Metadata meta = new Metadata(
-        "tbl", Optional.empty(), Optional.empty(), new Format(),
-        "{\"type\":\"struct\",\"fields\":[]}", new StructType(),
-        emptyArray(), Optional.empty(), emptyMap());
+    Metadata meta =
+        new Metadata(
+            "tbl",
+            Optional.empty(),
+            Optional.empty(),
+            new Format(),
+            "{\"type\":\"struct\",\"fields\":[]}",
+            new StructType(),
+            emptyArray(),
+            Optional.empty(),
+            emptyMap());
     return new CommitMetadata(
-        0L, "file:/tmp/tbl/_delta_log", baseCommitInfo(params), Collections.emptyList(),
-        Collections::emptyMap, Optional.empty(), Optional.of(new Protocol(1, 2)),
-        Optional.of(meta), Optional.empty());
+        0L,
+        "file:/tmp/tbl/_delta_log",
+        baseCommitInfo(params),
+        Collections.emptyList(),
+        Collections::emptyMap,
+        Optional.empty(),
+        Optional.of(new Protocol(1, 2)),
+        Optional.of(meta),
+        Optional.empty());
   }
 
   private static Row nonCommitInfoRow() {
@@ -233,7 +285,8 @@ class UnityCatalogCommitterTest {
   }
 
   private static Commit stagedCommit(String logPath, long version) {
-    String name = FileNames.stagedCommitFile(new io.delta.kernel.internal.fs.Path(logPath), version);
+    String name =
+        FileNames.stagedCommitFile(new io.delta.kernel.internal.fs.Path(logPath), version);
     org.apache.hadoop.fs.FileStatus h =
         new org.apache.hadoop.fs.FileStatus(10, false, 1, 64, 1000 + version, new Path(name));
     return new Commit(version, h, 1000 + version);
@@ -241,8 +294,10 @@ class UnityCatalogCommitterTest {
 
   // write a real staged commit file under _staged_commits/ so publish can copy its bytes.
   private static ParsedCatalogCommitData stagedData(
-      java.nio.file.Path tableDir, String logPath, long version, String contents) throws IOException {
-    String name = FileNames.stagedCommitFile(new io.delta.kernel.internal.fs.Path(logPath), version);
+      java.nio.file.Path tableDir, String logPath, long version, String contents)
+      throws IOException {
+    String name =
+        FileNames.stagedCommitFile(new io.delta.kernel.internal.fs.Path(logPath), version);
     java.nio.file.Path file = java.nio.file.Paths.get(URI.create(name));
     Files.createDirectories(file.getParent());
     Files.write(file, contents.getBytes(StandardCharsets.UTF_8));
@@ -407,8 +462,12 @@ class UnityCatalogCommitterTest {
 
     @Override
     public void finalizeCreate(
-        String a, String b, String c, String d,
-        List<UCClient.ColumnDef> cols, Map<String, String> props) {
+        String a,
+        String b,
+        String c,
+        String d,
+        List<UCClient.ColumnDef> cols,
+        Map<String, String> props) {
       throw new UnsupportedOperationException();
     }
 

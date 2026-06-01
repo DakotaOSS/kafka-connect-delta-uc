@@ -29,12 +29,12 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 /**
  * Throughput + commit-latency benchmark against a managed catalog-managed table, using a Debezium
- * envelope payload (nested before/after/source structs) run through {@link SchemaMapper} /
- * {@link RecordConverter}.
+ * envelope payload (nested before/after/source structs) run through {@link SchemaMapper} / {@link
+ * RecordConverter}.
  *
- * <p>Snapshot is loaded once and the in-memory post-commit snapshot is reused for the next append, so
- * there is no per-commit log re-read. Backfill + checkpoint run async, off the latency path; safe
- * because UC already holds the ratified commit. Reported per-commit latency is the synchronous
+ * <p>Snapshot is loaded once and the in-memory post-commit snapshot is reused for the next append,
+ * so there is no per-commit log re-read. Backfill + checkpoint run async, off the latency path;
+ * safe because UC already holds the ratified commit. Reported per-commit latency is the synchronous
  * write+ratify a producer waits on.
  *
  * <p>Env: DATABRICKS_HOST, DATABRICKS_TOKEN, BENCH_TABLE (envelope schema, catalogManaged),
@@ -80,7 +80,8 @@ class BenchmarkTest {
     long totalRows = Long.parseLong(System.getenv("BENCH_ROWS"));
     int batchRows = Integer.parseInt(System.getenv().getOrDefault("BENCH_BATCH", "1000000"));
 
-    // prebuild a pool of distinct records; batches reference these to keep allocation out of the loop
+    // prebuild a pool of distinct records; batches reference these to keep allocation out of the
+    // loop
     SinkRecord[] pool = new SinkRecord[POOL];
     for (int i = 0; i < POOL; i++) {
       pool[i] = envelopeRecord(i);
@@ -94,17 +95,22 @@ class BenchmarkTest {
     UnityCatalogClient.TableInfo info = uc.getTable(fullName);
     Configuration conf = new Configuration();
     target.hadoopConfig().forEach(conf::set);
-    conf.set("fs.abfss.impl.disable.cache", System.getenv().getOrDefault("BENCH_FS_CACHE_DISABLE", "false"));
+    conf.set(
+        "fs.abfss.impl.disable.cache",
+        System.getenv().getOrDefault("BENCH_FS_CACHE_DISABLE", "false"));
     Engine engine = DefaultEngine.create(conf);
     UnityCatalogCommitter committer =
         new UnityCatalogCommitter(host, token, info.tableId, info.storageLocation, conf);
     DeltaKernelWriter writer = new DeltaKernelWriter();
 
-    System.out.printf("[BENCH] table=%s rows=%d batch=%d shape=debezium-envelope%n", fullName, totalRows, batchRows);
+    System.out.printf(
+        "[BENCH] table=%s rows=%d batch=%d shape=debezium-envelope%n",
+        fullName, totalRows, batchRows);
 
     UnityCatalogCommitter.CatalogState state = committer.catalogState();
     Snapshot snapshot =
-        writer.loadCatalogSnapshot(engine, target.tablePath(), committer, state.commits, state.maxVersion);
+        writer.loadCatalogSnapshot(
+            engine, target.tablePath(), committer, state.commits, state.maxVersion);
 
     ExecutorService maintenance = Executors.newSingleThreadExecutor();
     List<Future<?>> pending = new ArrayList<>();
@@ -159,11 +165,17 @@ class BenchmarkTest {
     Struct after =
         "d".equals(op)
             ? null
-            : new Struct(ROW).put("id", i).put("name", "customer_" + i).put("email", "user" + i + "@example.com");
+            : new Struct(ROW)
+                .put("id", i)
+                .put("name", "customer_" + i)
+                .put("email", "user" + i + "@example.com");
     Struct before =
         "c".equals(op)
             ? null
-            : new Struct(ROW).put("id", i).put("name", "old_" + i).put("email", "user" + i + "@example.com");
+            : new Struct(ROW)
+                .put("id", i)
+                .put("name", "old_" + i)
+                .put("email", "user" + i + "@example.com");
     Struct source =
         new Struct(SOURCE).put("db", "sales").put("table_name", "customers").put("lsn", (long) i);
     Struct value =

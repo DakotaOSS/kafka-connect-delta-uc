@@ -17,12 +17,15 @@ public final class Redact {
   private static final Pattern ABFS_URL = Pattern.compile("(?i)abfss?://[^\\s\"'<]+");
   // loose SAS / bearer fragments anywhere
   private static final Pattern SAS_PARAMS =
-      Pattern.compile("(?i)(sig|se|st|skoid|sktid|sks|ske|skt|skv|spr|srt|ss|sp|sr|sv|sdd)=[^&\\s\"']+");
+      Pattern.compile(
+          "(?i)(sig|se|st|skoid|sktid|sks|ske|skt|skv|spr|srt|ss|sp|sr|sv|sdd)=[^&\\s\"']+");
   private static final Pattern BEARER = Pattern.compile("(?i)(bearer\\s+)[A-Za-z0-9._\\-]+");
   private static final Pattern SAS_TOKEN_JSON =
       Pattern.compile("(?i)(\"?sas_token\"?\\s*[:=]\\s*\"?)[^\"&\\s,}]+");
 
-  /** Return {@code s} with abfss:// URLs, SAS params, bearer tokens, and sas_token values masked. */
+  /**
+   * Return {@code s} with abfss:// URLs, SAS params, bearer tokens, and sas_token values masked.
+   */
   public static String text(String s) {
     if (s == null) {
       return null;
@@ -35,9 +38,10 @@ public final class Redact {
   }
 
   /**
-   * Redacted {@code toString()} of a throwable <b>and its cause chain</b>, for safe logging. Recursing
-   * matters because a redacted message is often re-thrown while the raw throwable is dropped: a SAS
-   * buried in a nested cause must not survive in the text we keep. Bounded depth; guards self-cause.
+   * Redacted {@code toString()} of a throwable <b>and its cause chain</b>, for safe logging.
+   * Recursing matters because a redacted message is often re-thrown while the raw throwable is
+   * dropped: a SAS buried in a nested cause must not survive in the text we keep. Bounded depth;
+   * guards self-cause.
    */
   public static String message(Throwable t) {
     if (t == null) {

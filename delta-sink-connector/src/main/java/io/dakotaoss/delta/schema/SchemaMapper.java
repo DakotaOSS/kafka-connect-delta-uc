@@ -1,5 +1,6 @@
 package io.dakotaoss.delta.schema;
 
+import io.dakotaoss.delta.util.Redact;
 import io.delta.kernel.types.ArrayType;
 import io.delta.kernel.types.BinaryType;
 import io.delta.kernel.types.BooleanType;
@@ -17,7 +18,6 @@ import io.delta.kernel.types.StringType;
 import io.delta.kernel.types.StructField;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.types.TimestampType;
-import io.dakotaoss.delta.util.Redact;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Field;
@@ -71,8 +71,7 @@ public final class SchemaMapper {
           return DateType.DATE;
         case Decimal.LOGICAL_NAME:
           // parameters()/scale may be absent or out of range on a malformed schema; fail loud.
-          if (schema.parameters() == null
-              || schema.parameters().get(Decimal.SCALE_FIELD) == null) {
+          if (schema.parameters() == null || schema.parameters().get(Decimal.SCALE_FIELD) == null) {
             throw new DataException("Decimal schema is missing required scale parameter");
           }
           int scale;

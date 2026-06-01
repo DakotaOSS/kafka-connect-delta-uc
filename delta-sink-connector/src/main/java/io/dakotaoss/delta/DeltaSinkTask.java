@@ -55,8 +55,8 @@ import org.slf4j.LoggerFactory;
  * table, reuse the in-memory post-commit snapshot (no per-commit log re-read), and run
  * backfill/checkpoint off the commit path on a background executor. Filesystem tables commit
  * directly. {@code preCommit} returns offsets only after the Delta commit succeeds; together with
- * the per-partition {@code SetTransaction(appId, offset)} stamp this gives effectively-once delivery
- * across restarts.
+ * the per-partition {@code SetTransaction(appId, offset)} stamp this gives effectively-once
+ * delivery across restarts.
  */
 public final class DeltaSinkTask extends SinkTask {
 
@@ -74,12 +74,14 @@ public final class DeltaSinkTask extends SinkTask {
   // oauth/entra modes) authenticates every UC call this task makes.
   private CredentialProvider credential;
   private TableResolver resolver;
-  // Prod-only (null under the test constructor): the UC client + typed resolver for auto-creating an
+  // Prod-only (null under the test constructor): the UC client + typed resolver for auto-creating
+  // an
   // absent catalog-managed table on first write. The auto-create path is guarded on uc != null.
   private UnityCatalogClient uc;
   private UcTableResolver ucResolver;
   private boolean autoCreate;
-  // additive schema evolution policy (catalog-managed only); NONE = today's fail-closed DLQ routing.
+  // additive schema evolution policy (catalog-managed only); NONE = today's fail-closed DLQ
+  // routing.
   private SchemaEvolution.Policy evolution = SchemaEvolution.Policy.NONE;
   private EngineProvider engineProvider;
   private DeltaKernelWriter writer;
@@ -89,11 +91,14 @@ public final class DeltaSinkTask extends SinkTask {
   private long flushIntervalMs;
 
   private final Object lock = new Object();
-  // per-partition rows/bytes/start bookkeeping; all access is under lock (built in start()/test ctor
+  // per-partition rows/bytes/start bookkeeping; all access is under lock (built in start()/test
+  // ctor
   // once flush.bytes is known, so it can skip byte estimation when the dial is off).
   private RecordBuffer buffer;
-  // Concurrent: with flush.concurrency>1 these are touched by per-table commit tasks running off the
-  // task thread. committed is written per-partition, tableStates per-table -- disjoint keys per task.
+  // Concurrent: with flush.concurrency>1 these are touched by per-table commit tasks running off
+  // the
+  // task thread. committed is written per-partition, tableStates per-table -- disjoint keys per
+  // task.
   private final Map<TopicPartition, Long> committed = new ConcurrentHashMap<>();
   private final Map<String, TableState> tableStates = new ConcurrentHashMap<>();
 
@@ -111,7 +116,8 @@ public final class DeltaSinkTask extends SinkTask {
   // class is final, so these are injection points rather than overridable methods.
   private int maxBufferedRecords = MAX_BUFFERED_RECORDS;
   private java.util.function.LongSupplier clock = System::currentTimeMillis;
-  // builds a fresh (uncached) write state for a topic; the live impl resolves + opens UC, a test can
+  // builds a fresh (uncached) write state for a topic; the live impl resolves + opens UC, a test
+  // can
   // supply a catalog-managed state without a network round-trip.
   private java.util.function.Function<String, TableState> stateBuilder = this::buildState;
   // redacted async-maintenance failure sink; the redaction happens before the text reaches here.
@@ -168,12 +174,16 @@ public final class DeltaSinkTask extends SinkTask {
     this.maintenance = Executors.newSingleThreadExecutor();
   }
 
-  /** Test seam: supply the DLQ reporter that {@code start()} would otherwise pull from the context. */
+  /**
+   * Test seam: supply the DLQ reporter that {@code start()} would otherwise pull from the context.
+   */
   void injectReporter(ErrantRecordReporter reporter) {
     this.reporter = reporter;
   }
 
-  /** Test seam: shrink the backpressure ceiling so the cap is reachable without millions of rows. */
+  /**
+   * Test seam: shrink the backpressure ceiling so the cap is reachable without millions of rows.
+   */
   void setMaxBufferedRecordsForTest(int cap) {
     this.maxBufferedRecords = cap;
   }
@@ -183,7 +193,9 @@ public final class DeltaSinkTask extends SinkTask {
     this.clock = clock;
   }
 
-  /** Test seam: capture the redacted text the async-maintenance failure path would otherwise log. */
+  /**
+   * Test seam: capture the redacted text the async-maintenance failure path would otherwise log.
+   */
   void setAsyncMaintenanceErrorSinkForTest(java.util.function.Consumer<String> sink) {
     this.asyncMaintenanceErrorSink = sink;
   }
@@ -193,7 +205,9 @@ public final class DeltaSinkTask extends SinkTask {
     this.stateBuilder = builder;
   }
 
-  /** Test seam: clock reading used to stamp a {@link TableState} built outside the live resolver. */
+  /**
+   * Test seam: clock reading used to stamp a {@link TableState} built outside the live resolver.
+   */
   long clockForTest() {
     return clock.getAsLong();
   }
@@ -252,8 +266,13 @@ public final class DeltaSinkTask extends SinkTask {
       int buffered = buffer.totalRows();
       if (buffered + records.size() > maxBufferedRecords) {
         throw new RetriableException(
-            "buffered records " + buffered + " + " + records.size()
-                + " would exceed cap " + maxBufferedRecords + "; applying backpressure");
+            "buffered records "
+                + buffered
+                + " + "
+                + records.size()
+                + " would exceed cap "
+                + maxBufferedRecords
+                + "; applying backpressure");
       }
       long now = clock.getAsLong();
       for (SinkRecord record : records) {
@@ -282,11 +301,12 @@ public final class DeltaSinkTask extends SinkTask {
 
   /**
    * Flush every dirty partition. Serially (flush.concurrency==1, today's behavior) or, when >1 and
-   * more than one table is dirty, with one commit task per table on the bounded {@code flushExecutor} --
-   * different tables commit in parallel (overlapping WAN round-trips) while a table's own partitions
-   * stay serial inside its task (so its reused snapshot is touched by one thread, preserving order).
-   * Caller holds {@code lock} for the whole call incl. the await, so no other flush runs meanwhile and
-   * the only concurrent state is the per-table maps (committed/tableStates) and the synchronized buffer.
+   * more than one table is dirty, with one commit task per table on the bounded {@code
+   * flushExecutor} -- different tables commit in parallel (overlapping WAN round-trips) while a
+   * table's own partitions stay serial inside its task (so its reused snapshot is touched by one
+   * thread, preserving order). Caller holds {@code lock} for the whole call incl. the await, so no
+   * other flush runs meanwhile and the only concurrent state is the per-table maps
+   * (committed/tableStates) and the synchronized buffer.
    */
   private void flushDirty() {
     List<TopicPartition> parts = buffer.partitions();
@@ -316,7 +336,8 @@ public final class DeltaSinkTask extends SinkTask {
       try {
         f.get();
       } catch (ExecutionException ee) {
-        // one table's commit failed (already DLQ-handled if a reporter was set, else fatal). Let the
+        // one table's commit failed (already DLQ-handled if a reporter was set, else fatal). Let
+        // the
         // other tables finish, then surface the first failure to fail the task -- its offset never
         // advanced, so Connect redelivers it; tables that succeeded keep their advanced offsets.
         RuntimeException re =
@@ -349,7 +370,9 @@ public final class DeltaSinkTask extends SinkTask {
     }
   }
 
-  /** Commit one topic-partition's buffer as a single Delta transaction. Caller holds {@code lock}. */
+  /**
+   * Commit one topic-partition's buffer as a single Delta transaction. Caller holds {@code lock}.
+   */
   private void flush(TopicPartition tp) {
     List<SinkRecord> batch = buffer.rows(tp);
     if (batch == null || batch.isEmpty()) {
@@ -358,11 +381,13 @@ public final class DeltaSinkTask extends SinkTask {
     long lastOffset = batch.get(batch.size() - 1).kafkaOffset();
 
     // Split into writable rows (Struct values on a single reference schema) and poison. reportBad
-    // routes poison to the DLQ (the commit then advances the offset past it), or fails the task when
+    // routes poison to the DLQ (the commit then advances the offset past it), or fails the task
+    // when
     // no DLQ reporter is configured -- the offset never advances over poison silently.
     PoisonPartitioner split = PoisonPartitioner.of(batch);
     for (SinkRecord bad : split.poison) {
-      reportBad(bad, new ConnectException("poison record: non-Struct/null value or schema mismatch"));
+      reportBad(
+          bad, new ConnectException("poison record: non-Struct/null value or schema mismatch"));
     }
     Schema refSchema = split.refSchema;
     List<SinkRecord> good = split.good;
@@ -375,7 +400,8 @@ public final class DeltaSinkTask extends SinkTask {
     }
 
     String appId = connectorName + ":" + tp.topic() + "-" + tp.partition();
-    // Create the catalog-managed table on first write if it's absent (auto.create.tables). Only on a
+    // Create the catalog-managed table on first write if it's absent (auto.create.tables). Only on
+    // a
     // cache miss, so steady-state flushes don't pay an extra getTable. refSchema gives the columns.
     if (autoCreate && uc != null && !tableStates.containsKey(tp.topic())) {
       ensureCatalogTable(tp.topic(), refSchema);
@@ -383,8 +409,10 @@ public final class DeltaSinkTask extends SinkTask {
     TableState st = stateFor(tp.topic());
     try {
       StructType kernelSchema = SchemaMapper.toKernel(refSchema);
-      // Additive schema evolution (catalog-managed only): if the incoming batch adds nullable columns,
-      // ALTER the table Databricks-side, then reload so the snapshot reflects the new schema/version
+      // Additive schema evolution (catalog-managed only): if the incoming batch adds nullable
+      // columns,
+      // ALTER the table Databricks-side, then reload so the snapshot reflects the new
+      // schema/version
       // before the append. A non-additive change is poison -> DLQ (or fail the task). The append's
       // SetTransaction(appId, offset) makes a replay a no-op, and the column-present diff makes the
       // re-evolve a no-op, so a replayed batch neither double-appends nor re-evolves.
@@ -395,7 +423,8 @@ public final class DeltaSinkTask extends SinkTask {
             reportBad(record, new ConnectException("non-additive schema change; routed to DLQ"));
           }
           commitFlushed(tp, lastOffset);
-          LOG.warn("Flush for {} routed {} rows to DLQ (non-additive schema change)", tp, good.size());
+          LOG.warn(
+              "Flush for {} routed {} rows to DLQ (non-additive schema change)", tp, good.size());
           return;
         }
         if (ev.changed()) {
@@ -407,8 +436,10 @@ public final class DeltaSinkTask extends SinkTask {
       FilteredColumnarBatch data = RecordConverter.toBatch(kernelSchema, refSchema, good);
       if (st.committer != null) {
         // Catalog-managed: reuse the in-memory snapshot, run backfill/checkpoint async. Invariant:
-        // st.snapshot is read and advanced only here, on the flush/commit thread under lock; the async
-        // maintenance task captures the immutable commit result + engine and never touches st.snapshot.
+        // st.snapshot is read and advanced only here, on the flush/commit thread under lock; the
+        // async
+        // maintenance task captures the immutable commit result + engine and never touches
+        // st.snapshot.
         TransactionCommitResult result =
             writer.appendToSnapshot(st.engine, st.snapshot, data, appId, lastOffset);
         if (result != null) {
@@ -433,10 +464,14 @@ public final class DeltaSinkTask extends SinkTask {
     } catch (Exception e) {
       // drop cached state so next flush re-resolves: re-vends creds, reloads snapshot
       tableStates.remove(tp.topic());
-      // Redact before the failure leaves our code and drop the raw cause: ABFS IOExceptions embed the
-      // request URL incl. the vended SAS, and whatever we hand off persists -- DLQ record headers, and
-      // Connect's task-failure log (which prints the whole cause chain). Carry only the redacted text.
-      ConnectException safe = new ConnectException("flush failed for " + tp + ": " + Redact.message(e));
+      // Redact before the failure leaves our code and drop the raw cause: ABFS IOExceptions embed
+      // the
+      // request URL incl. the vended SAS, and whatever we hand off persists -- DLQ record headers,
+      // and
+      // Connect's task-failure log (which prints the whole cause chain). Carry only the redacted
+      // text.
+      ConnectException safe =
+          new ConnectException("flush failed for " + tp + ": " + Redact.message(e));
       if (reporter != null) {
         // conversion/write failed for this batch as a whole: route its records to the DLQ and skip,
         // rather than crash-looping the task on data we cannot write.
@@ -457,8 +492,9 @@ public final class DeltaSinkTask extends SinkTask {
 
   /**
    * Run async backfill/checkpoint off the commit path. UC already holds the ratified commit, so a
-   * failed publish/checkpoint is non-fatal -- swallow it (redacted; the cause can embed a vended SAS)
-   * rather than fail the producer's commit. Package-private so a fault-injection test can drive it.
+   * failed publish/checkpoint is non-fatal -- swallow it (redacted; the cause can embed a vended
+   * SAS) rather than fail the producer's commit. Package-private so a fault-injection test can
+   * drive it.
    */
   void runMaintenance(Engine engine, TransactionCommitResult result, String topic) {
     try {
@@ -513,7 +549,9 @@ public final class DeltaSinkTask extends SinkTask {
     return st;
   }
 
-  /** Resolve a topic to a fresh write state (no cache); the live default for {@code stateBuilder}. */
+  /**
+   * Resolve a topic to a fresh write state (no cache); the live default for {@code stateBuilder}.
+   */
   private TableState buildState(String topic) {
     TableTarget target = resolver.resolve(topic);
     Engine engine = engineProvider.engineFor(target);
@@ -522,25 +560,23 @@ public final class DeltaSinkTask extends SinkTask {
       target.hadoopConfig().forEach(conf::set);
       UnityCatalogCommitter committer =
           new UnityCatalogCommitter(
-              config.workspaceUrl(),
-              credential,
-              target.tableId(),
-              target.tablePath(),
-              conf);
+              config.workspaceUrl(), credential, target.tableId(), target.tablePath(), conf);
       UnityCatalogCommitter.CatalogState cs = committer.catalogState();
       Snapshot snapshot =
-          writer.loadCatalogSnapshot(engine, target.tablePath(), committer, cs.commits, cs.maxVersion);
+          writer.loadCatalogSnapshot(
+              engine, target.tablePath(), committer, cs.commits, cs.maxVersion);
       return new TableState(target, engine, committer, snapshot, clock.getAsLong());
     }
     return new TableState(target, engine, null, null, clock.getAsLong());
   }
 
   /**
-   * Create the topic's catalog-managed table if absent (auto.create.tables): register it in UC with a
-   * schema derived from {@code valueSchema} (columns nullable), then write its v0 schema commit so the
-   * normal append path takes over. v0 carries no data; the first batch is appended as v1 with its
-   * SetTransaction stamp, so a crash between create and offset-commit can't duplicate it. No-op if the
-   * table exists; a non-404 error is left for stateFor's resolve to surface (redacted).
+   * Create the topic's catalog-managed table if absent (auto.create.tables): register it in UC with
+   * a schema derived from {@code valueSchema} (columns nullable), then write its v0 schema commit
+   * so the normal append path takes over. v0 carries no data; the first batch is appended as v1
+   * with its SetTransaction stamp, so a crash between create and offset-commit can't duplicate it.
+   * No-op if the table exists; a non-404 error is left for stateFor's resolve to surface
+   * (redacted).
    */
   private void ensureCatalogTable(String topic, org.apache.kafka.connect.data.Schema valueSchema) {
     String fullName = ucResolver.nameFor(topic);
@@ -561,7 +597,10 @@ public final class DeltaSinkTask extends SinkTask {
       // DDL via a SQL warehouse: Databricks writes the table's v0 (an external engine cannot commit
       // v0 -- UC's create protocol differs from its commit path), then the normal append writes v1.
       String ddl =
-          "CREATE TABLE IF NOT EXISTS " + fullName + " (" + UcColumnMapper.ddlColumnDefs(valueSchema)
+          "CREATE TABLE IF NOT EXISTS "
+              + fullName
+              + " ("
+              + UcColumnMapper.ddlColumnDefs(valueSchema)
               + ") TBLPROPERTIES ('delta.feature.catalogManaged'='supported')";
       uc.executeStatement(warehouse, ddl);
       LOG.info("Auto-created catalog-managed table {}", fullName);
@@ -573,28 +612,35 @@ public final class DeltaSinkTask extends SinkTask {
   /**
    * Add the (nullable) {@code columns} to a catalog-managed table via {@code ALTER TABLE ... ADD
    * COLUMNS} on the SQL warehouse (schema.evolution). Databricks commits the DDL; the caller then
-   * reloads the snapshot and the normal append writes the wider rows -- no column mapping needed (the
-   * Kernel write path cannot touch a column-mapping table on 4.2.0). A concurrent evolver may have
-   * already added the columns; that "already exists" is benign (we reload and continue either way).
+   * reloads the snapshot and the normal append writes the wider rows -- no column mapping needed
+   * (the Kernel write path cannot touch a column-mapping table on 4.2.0). A concurrent evolver may
+   * have already added the columns; that "already exists" is benign (we reload and continue either
+   * way).
    */
   private void alterAddColumns(
       String fullName, org.apache.kafka.connect.data.Schema valueSchema, List<String> columns) {
     String ddl =
-        "ALTER TABLE " + fullName + " ADD COLUMNS ("
-            + UcColumnMapper.addColumnsDdl(valueSchema, columns) + ")";
+        "ALTER TABLE "
+            + fullName
+            + " ADD COLUMNS ("
+            + UcColumnMapper.addColumnsDdl(valueSchema, columns)
+            + ")";
     try {
       uc.executeStatement(config.warehouseId(), ddl);
       LOG.info("Evolved {} (+columns {})", fullName, columns);
     } catch (Exception e) {
       if (alreadyExists(e)) {
-        LOG.info("Columns {} already present on {} (concurrent evolve); continuing", columns, fullName);
+        LOG.info(
+            "Columns {} already present on {} (concurrent evolve); continuing", columns, fullName);
         return;
       }
       throw new ConnectException("schema evolve failed for " + fullName + ": " + Redact.message(e));
     }
   }
 
-  /** A concurrent ALTER from another task can win the race; Databricks then rejects ours as a dup. */
+  /**
+   * A concurrent ALTER from another task can win the race; Databricks then rejects ours as a dup.
+   */
   private static boolean alreadyExists(Throwable t) {
     for (Throwable c = t; c != null && c != c.getCause(); c = c.getCause()) {
       String m = c.getMessage();
@@ -626,14 +672,16 @@ public final class DeltaSinkTask extends SinkTask {
       tableStates.clear();
     }
     // Drain the executors OUTSIDE the lock: awaitTermination can block up to 30s while async
-    // maintenance finishes, and put()/the interval flush also take the lock -- holding it here would
+    // maintenance finishes, and put()/the interval flush also take the lock -- holding it here
+    // would
     // freeze the poller and risk a Connect stop-timeout. flush() and stop() still serialize on the
     // lock, so no flush runs concurrently with the field nulling above.
     if (sched != null) {
       sched.shutdownNow();
     }
     if (flushEx != null) {
-      // a flushDirty in flight holds the lock, so by here no commit task is running; just release it.
+      // a flushDirty in flight holds the lock, so by here no commit task is running; just release
+      // it.
       flushEx.shutdownNow();
     }
     if (maint != null) {

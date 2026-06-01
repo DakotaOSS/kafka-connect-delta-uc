@@ -10,9 +10,9 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Additive-only schema diff for catalog-managed appends. Compares the incoming (Connect-mapped) schema
- * against the current Delta table schema and reports the new top-level columns to add, or flags the
- * change breaking so the caller keeps the fail-closed poison/DLQ path.
+ * Additive-only schema diff for catalog-managed appends. Compares the incoming (Connect-mapped)
+ * schema against the current Delta table schema and reports the new top-level columns to add, or
+ * flags the change breaking so the caller keeps the fail-closed poison/DLQ path.
  *
  * <p>The schema change is applied Databricks-side via {@code ALTER TABLE ... ADD COLUMNS} on a SQL
  * warehouse (see {@code DeltaSinkTask}), not through Kernel's {@code withUpdatedSchema}: that path
@@ -21,8 +21,8 @@ import java.util.Set;
  *
  * <p>Only new <b>nullable, top-level</b> columns are absorbed. A dropped column, an existing-column
  * type change, a nested-struct change, or a non-nullable new column is breaking -- drops/renames/
- * narrowing are DML the append-only bronze sink does not do, and widening is unavailable on the pinned
- * Kernel.
+ * narrowing are DML the append-only bronze sink does not do, and widening is unavailable on the
+ * pinned Kernel.
  */
 public final class SchemaEvolution {
 
@@ -36,7 +36,9 @@ public final class SchemaEvolution {
     }
   }
 
-  /** Diff outcome: the new column names to ADD, and whether the change is non-additive (breaking). */
+  /**
+   * Diff outcome: the new column names to ADD, and whether the change is non-additive (breaking).
+   */
   public static final class Result {
     public final List<String> addedColumns; // empty when nothing to add
     public final boolean breaking; // not additive -> caller routes the rows to the DLQ
@@ -56,9 +58,9 @@ public final class SchemaEvolution {
   private SchemaEvolution() {}
 
   /**
-   * Diff {@code incoming} against {@code current}. Every existing column must be present in incoming
-   * with an unchanged type; otherwise the change is breaking. New incoming columns must be nullable;
-   * their names are returned to drive {@code ALTER TABLE ... ADD COLUMNS}.
+   * Diff {@code incoming} against {@code current}. Every existing column must be present in
+   * incoming with an unchanged type; otherwise the change is breaking. New incoming columns must be
+   * nullable; their names are returned to drive {@code ALTER TABLE ... ADD COLUMNS}.
    */
   public static Result diff(StructType current, StructType incoming) {
     Map<String, StructField> inc = new LinkedHashMap<>();

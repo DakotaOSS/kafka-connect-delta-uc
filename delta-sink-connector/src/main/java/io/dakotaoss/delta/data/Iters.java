@@ -1,7 +1,6 @@
 package io.dakotaoss.delta.data;
 
 import io.delta.kernel.utils.CloseableIterator;
-
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 

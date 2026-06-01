@@ -25,7 +25,10 @@ class UcColumnMapperTest {
   @Test
   void ddlForNestedStructAndDecimal() {
     Schema src =
-        SchemaBuilder.struct().field("lsn", Schema.INT64_SCHEMA).field("db", Schema.STRING_SCHEMA).build();
+        SchemaBuilder.struct()
+            .field("lsn", Schema.INT64_SCHEMA)
+            .field("db", Schema.STRING_SCHEMA)
+            .build();
     Schema s =
         SchemaBuilder.struct().field("amount", Decimal.schema(2)).field("source", src).build();
     assertEquals(

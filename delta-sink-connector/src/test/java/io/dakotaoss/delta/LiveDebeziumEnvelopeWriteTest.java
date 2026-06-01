@@ -25,12 +25,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 /**
- * Live write for the full Debezium envelope shape: raw un-flattened CDC record with nested
- * {@code before}/{@code after}/{@code source} structs plus {@code op}/{@code ts_ms}. Exercises the
+ * Live write for the full Debezium envelope shape: raw un-flattened CDC record with nested {@code
+ * before}/{@code after}/{@code source} structs plus {@code op}/{@code ts_ms}. Exercises the
  * nested-struct path through {@link SchemaMapper} and {@link RecordConverter}, writing nested Delta
  * struct columns to a managed catalog-managed table.
  *
  * <p>Table must exist first (run once in Databricks):
+ *
  * <pre>
  *   CREATE TABLE main.default.customers_envelope (
  *     before STRUCT&lt;id:INT,name:STRING,email:STRING&gt;,
@@ -79,16 +80,41 @@ class LiveDebeziumEnvelopeWriteTest {
     long now = System.currentTimeMillis();
     List<SinkRecord> records = new ArrayList<>();
     // c: insert -> before null
-    records.add(env(envelope, row, source, null, after(row, 101, "Acme Corp", "ops@acme.example"), "c", now, 5001L, 0));
+    records.add(
+        env(
+            envelope,
+            row,
+            source,
+            null,
+            after(row, 101, "Acme Corp", "ops@acme.example"),
+            "c",
+            now,
+            5001L,
+            0));
     // u: update -> before + after
     records.add(
         env(
-            envelope, row, source,
+            envelope,
+            row,
+            source,
             after(row, 101, "Acme Corp", "ops@acme.example"),
             after(row, 101, "Acme Corporation", "ops@acme.example"),
-            "u", now + 1, 5002L, 1));
+            "u",
+            now + 1,
+            5002L,
+            1));
     // d: delete -> after null
-    records.add(env(envelope, row, source, after(row, 102, "Globex", "ar@globex.example"), null, "d", now + 2, 5003L, 2));
+    records.add(
+        env(
+            envelope,
+            row,
+            source,
+            after(row, 102, "Globex", "ar@globex.example"),
+            null,
+            "d",
+            now + 2,
+            5003L,
+            2));
 
     StructType kernelSchema = SchemaMapper.toKernel(envelope);
     FilteredColumnarBatch batch = RecordConverter.toBatch(kernelSchema, envelope, records);
@@ -107,14 +133,18 @@ class LiveDebeziumEnvelopeWriteTest {
 
     DeltaKernelWriter w = new DeltaKernelWriter();
     io.delta.kernel.Snapshot snapshot =
-        w.loadCatalogSnapshot(engine, target.tablePath(), committer, catalog.commits, catalog.maxVersion);
+        w.loadCatalogSnapshot(
+            engine, target.tablePath(), committer, catalog.commits, catalog.maxVersion);
     io.delta.kernel.TransactionCommitResult result =
         w.appendToSnapshot(engine, snapshot, batch, "debezium-envelope", now);
     w.maintain(engine, result);
 
     assertTrue(result != null && result.getVersion() >= 1, "commit should produce a table version");
     System.out.println(
-        "[LIVE] full Debezium envelope committed to " + fullName + " at version " + result.getVersion());
+        "[LIVE] full Debezium envelope committed to "
+            + fullName
+            + " at version "
+            + result.getVersion());
   }
 
   private static Struct after(Schema rowSchema, int id, String name, String email) {

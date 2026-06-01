@@ -21,9 +21,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 /**
- * Live: the connector auto-creates an absent catalog-managed table on first write (auto.create.tables)
- * and then appends. Skipped unless {@code DATABRICKS_HOST} is set. Drives the real {@link DeltaSinkTask}
- * path (start -> put -> preCommit) against a unique table name, then deletes the table.
+ * Live: the connector auto-creates an absent catalog-managed table on first write
+ * (auto.create.tables) and then appends. Skipped unless {@code DATABRICKS_HOST} is set. Drives the
+ * real {@link DeltaSinkTask} path (start -> put -> preCommit) against a unique table name, then
+ * deletes the table.
  *
  * <p>Env: {@code DATABRICKS_HOST}, {@code DATABRICKS_TOKEN}, optional {@code UC_SCHEMA} (default
  * {@code teck_testing.cdc}). The principal needs CREATE TABLE + EXTERNAL USE SCHEMA on the schema.
@@ -57,7 +58,13 @@ class LiveAutoCreateTest {
             .build();
     SinkRecord rec =
         new SinkRecord(
-            "orders", 0, null, null, value, new Struct(value).put("id", 1).put("name", "live-auto"), 0L);
+            "orders",
+            0,
+            null,
+            null,
+            value,
+            new Struct(value).put("id", 1).put("name", "live-auto"),
+            0L);
 
     DeltaSinkTask task = new DeltaSinkTask();
     try {

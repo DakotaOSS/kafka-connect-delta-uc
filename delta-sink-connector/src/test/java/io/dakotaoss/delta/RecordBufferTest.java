@@ -11,7 +11,9 @@ import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.junit.jupiter.api.Test;
 
-/** Per-partition buffer bookkeeping (rows / bytes / first-arrival), extracted from DeltaSinkTask. */
+/**
+ * Per-partition buffer bookkeeping (rows / bytes / first-arrival), extracted from DeltaSinkTask.
+ */
 class RecordBufferTest {
 
   private static final Schema S =
@@ -82,7 +84,8 @@ class RecordBufferTest {
     RecordBuffer b = new RecordBuffer(true);
     b.add(rec("t", 0, 0), 100);
     b.clear(TP0);
-    assertTrue(b.rows(TP0).isEmpty(), "rows emptied (key kept, matching the old buffers.get(tp).clear())");
+    assertTrue(
+        b.rows(TP0).isEmpty(), "rows emptied (key kept, matching the old buffers.get(tp).clear())");
     assertEquals(0L, b.byteSize(TP0));
     assertEquals(0, b.totalRows());
   }

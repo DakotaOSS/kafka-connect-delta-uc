@@ -26,12 +26,12 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 /**
  * Live write for the flattened Debezium shape: a CDC record after the {@code ExtractNewRecordState}
- * SMT has unwrapped the envelope to the "after" image plus metadata columns ({@code op},
- * {@code source_ts_ms}, {@code lsn}). Flat struct, handled as-is by {@link SchemaMapper} /
- * {@link RecordConverter}, committed to a managed catalog-managed table via
- * {@link UnityCatalogCommitter}.
+ * SMT has unwrapped the envelope to the "after" image plus metadata columns ({@code op}, {@code
+ * source_ts_ms}, {@code lsn}). Flat struct, handled as-is by {@link SchemaMapper} / {@link
+ * RecordConverter}, committed to a managed catalog-managed table via {@link UnityCatalogCommitter}.
  *
  * <p>Table must exist first (run once in Databricks):
+ *
  * <pre>
  *   CREATE TABLE main.default.customers_flat
  *     (id INT, name STRING, email STRING, op STRING, source_ts_ms LONG, lsn LONG)
@@ -85,14 +85,18 @@ class LiveDebeziumFlatWriteTest {
 
     DeltaKernelWriter w = new DeltaKernelWriter();
     io.delta.kernel.Snapshot snapshot =
-        w.loadCatalogSnapshot(engine, target.tablePath(), committer, catalog.commits, catalog.maxVersion);
+        w.loadCatalogSnapshot(
+            engine, target.tablePath(), committer, catalog.commits, catalog.maxVersion);
     io.delta.kernel.TransactionCommitResult result =
         w.appendToSnapshot(engine, snapshot, batch, "debezium-flat", now);
     w.maintain(engine, result);
 
     assertTrue(result != null && result.getVersion() >= 1, "commit should produce a table version");
     System.out.println(
-        "[LIVE] flattened Debezium rows committed to " + fullName + " at version " + result.getVersion());
+        "[LIVE] flattened Debezium rows committed to "
+            + fullName
+            + " at version "
+            + result.getVersion());
   }
 
   private static SinkRecord rec(

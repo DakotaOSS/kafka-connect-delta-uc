@@ -12,14 +12,15 @@ import java.util.Map;
  * directory-scoped SAS at the request boundary.
  *
  * <p>Why a side store instead of the Hadoop {@code Configuration}:
+ *
  * <ul>
- *   <li><b>secrecy</b> — the SAS is held here as {@code char[]} (zeroed on re-vend) and never placed
- *       in the {@code Configuration}, so a config dump can't expose the live write credential and the
- *       cleartext can be cleared.
- *   <li><b>per-table isolation without disabling the FS cache</b> — Hadoop caches one FileSystem per
- *       storage host. With the SAS in the config that single FS would carry one table's token and 403
- *       on a second table sharing the host. Vending per request path lets one cached FS serve many
- *       tables, so we no longer disable the JVM-global FS cache.
+ *   <li><b>secrecy</b> — the SAS is held here as {@code char[]} (zeroed on re-vend) and never
+ *       placed in the {@code Configuration}, so a config dump can't expose the live write
+ *       credential and the cleartext can be cleared.
+ *   <li><b>per-table isolation without disabling the FS cache</b> — Hadoop caches one FileSystem
+ *       per storage host. With the SAS in the config that single FS would carry one table's token
+ *       and 403 on a second table sharing the host. Vending per request path lets one cached FS
+ *       serve many tables, so we no longer disable the JVM-global FS cache.
  * </ul>
  *
  * <p>Instances are independent (tests use their own); production uses {@link #instance()}.
@@ -27,7 +28,8 @@ import java.util.Map;
 public final class VendedSasStore {
 
   // a moved storage location or a churning topic/path set could otherwise grow byHost's inner maps
-  // without bound (zeroed arrays, no secret leak — just heap); cap each host and evict the LRU entry.
+  // without bound (zeroed arrays, no secret leak — just heap); cap each host and evict the LRU
+  // entry.
   private static final int DEFAULT_MAX_ENTRIES_PER_HOST = 1024;
 
   private static final VendedSasStore INSTANCE = new VendedSasStore();
@@ -52,8 +54,8 @@ public final class VendedSasStore {
 
   /**
    * Register (or replace) a table's SAS, scoped to {@code container/dirPath}. Takes ownership of
-   * {@code sas}; the previous token for the same path is zeroed. Evicting the LRU entry once the host
-   * exceeds its entry cap also zeroes the dropped token.
+   * {@code sas}; the previous token for the same path is zeroed. Evicting the LRU entry once the
+   * host exceeds its entry cap also zeroes the dropped token.
    */
   public synchronized void put(String host, String container, String dirPath, char[] sas) {
     Map<String, char[]> m = byHost.computeIfAbsent(hostKey(host), h -> newBoundedMap());
@@ -64,9 +66,9 @@ public final class VendedSasStore {
   }
 
   /**
-   * The SAS for the registered table directory that is the longest path-prefix of
-   * {@code container/path}, as a freshly materialized String (the HTTP boundary), or {@code null} if
-   * none is registered.
+   * The SAS for the registered table directory that is the longest path-prefix of {@code
+   * container/path}, as a freshly materialized String (the HTTP boundary), or {@code null} if none
+   * is registered.
    */
   public synchronized String sasFor(String host, String container, String path) {
     Map<String, char[]> m = mapFor(host);
@@ -99,10 +101,14 @@ public final class VendedSasStore {
     };
   }
 
-  // Resolve the inner map for a lookup host. Registration always stores the full host; ABFS, however,
-  // may call getSASToken with either the full host or the bare account name. Prefer an exact full-host
-  // match; only when the lookup is a bare account (no dot) fall back to a registered host whose short
-  // name matches — and only if exactly one does, so dfs/blob/private-link hosts that share a short name
+  // Resolve the inner map for a lookup host. Registration always stores the full host; ABFS,
+  // however,
+  // may call getSASToken with either the full host or the bare account name. Prefer an exact
+  // full-host
+  // match; only when the lookup is a bare account (no dot) fall back to a registered host whose
+  // short
+  // name matches — and only if exactly one does, so dfs/blob/private-link hosts that share a short
+  // name
   // can't be served each other's endpoint-mismatched SAS.
   private Map<String, char[]> mapFor(String host) {
     if (host == null) {

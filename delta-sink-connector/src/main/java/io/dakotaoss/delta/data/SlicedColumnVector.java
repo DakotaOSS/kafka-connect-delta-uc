@@ -4,13 +4,13 @@ import io.delta.kernel.data.ArrayValue;
 import io.delta.kernel.data.ColumnVector;
 import io.delta.kernel.data.MapValue;
 import io.delta.kernel.types.DataType;
-
 import java.math.BigDecimal;
 
 /**
  * Read-only window {@code [start, end)} onto a flat child vector. Backs one array/map row: the
  * collection's elements are stored contiguously across all rows, and a slice exposes one row's run
- * as a 0-based {@link ColumnVector}. Does not own the backing vector, so {@link #close()} is a no-op.
+ * as a 0-based {@link ColumnVector}. Does not own the backing vector, so {@link #close()} is a
+ * no-op.
  */
 final class SlicedColumnVector implements ColumnVector {
 
