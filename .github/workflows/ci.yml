@@ -20,8 +20,9 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: maven
-      # offline suite only; live + benchmark tests are env-gated and auto-skip.
-      - run: mvn -B test
+      # offline suite only; live + benchmark tests are env-gated and auto-skip. verify (not test)
+      # so jacoco:check enforces the coverage floor.
+      - run: mvn -B verify
         working-directory: delta-sink-connector
 
   # packaging is the deliverable: assemble the plugin dir and assert its closure. enforcer catches
