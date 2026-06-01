@@ -100,24 +100,21 @@ Poison rows / unwritable batches go to the DLQ when a reporter is configured, el
 
 ```mermaid
 graph TD
-    K["Kafka / Warpstream topic"]
-    P["DeltaSinkTask.put()<br/>buffer per topic-partition"]
-    S["SchemaMapper + RecordConverter<br/>Connect STRUCT → Kernel batch"]
-    R["UcTableResolver + UnityCatalogClient<br/>resolve table id + vend SAS"]
-    E["EngineProvider<br/>DefaultEngine + Hadoop conf"]
-    W["DeltaKernelWriter<br/>write Parquet → txn.commit"]
-    C["UnityCatalogCommitter<br/>stage → UC ratify (first-writer-wins)"]
-    M["reuse post-commit snapshot<br/>publish + checkpoint (async)"]
-    O["preCommit() returns offset<br/>after the commit succeeds"]
+    K["Kafka / Warpstream"]
+    P["DeltaSinkTask.put()<br/>buffer per partition"]
+    S["SchemaMapper +<br/>RecordConverter"]
+    R["UcTableResolver +<br/>UnityCatalogClient"]
+    E["EngineProvider<br/>(Kernel + Hadoop)"]
+    W["DeltaKernelWriter<br/>write Parquet"]
+    C["UnityCatalogCommitter<br/>stage → UC ratify"]
+    M["reuse snapshot;<br/>publish + checkpoint"]
+    O["preCommit() offset<br/>after commit"]
 
-    K -->|"CDC envelope (flattened)"| P
-    P -->|"flush.size / .bytes / .interval.ms"| S
-    S --> R
-    R --> E
-    E --> W
+    K -->|"CDC envelope"| P
+    P -->|"flush dials"| S
+    S --> R --> E --> W
     W -->|"txn.commit"| C
-    C --> M
-    M --> O
+    C --> M --> O
 ```
 
 (Detail per stage is in the sections below; the diagram shows the flow.)
