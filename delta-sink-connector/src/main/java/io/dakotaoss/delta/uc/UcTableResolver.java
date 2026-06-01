@@ -1,6 +1,7 @@
 package io.dakotaoss.delta.uc;
 
 import io.dakotaoss.delta.model.TableTarget;
+import io.dakotaoss.delta.util.Redact;
 import org.apache.kafka.connect.errors.ConnectException;
 
 import java.net.URI;
@@ -72,7 +73,10 @@ public final class UcTableResolver implements TableResolver {
       Thread.currentThread().interrupt();
       throw new ConnectException("Interrupted resolving UC table " + fullName, e);
     } catch (Exception e) {
-      throw new ConnectException("Failed to resolve UC table " + fullName, e);
+      // Drop the raw cause: today resolve()'s causes are pre-redacted by the UC client, but a future
+      // refactor could surface a raw ABFS exception whose message embeds a vended SAS, and the chained
+      // cause would reach Connect's task-failure log verbatim. Keep only the redacted message.
+      throw new ConnectException("Failed to resolve UC table " + fullName + ": " + Redact.message(e));
     }
   }
 

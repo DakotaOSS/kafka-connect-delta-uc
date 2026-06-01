@@ -58,4 +58,19 @@ class RedactTest {
     assertFalse(out.contains("acct.dfs.core.windows.net"));
     assertTrue(out.contains("RuntimeException"), "throwable type should remain for diagnosis");
   }
+
+  @Test
+  void messageRecursesCauseChainAndRedacts() {
+    // a SAS buried in a nested cause must not survive: message() recurses the whole chain, redacting
+    // each level (the top-level toString() alone would omit the cause, but a raw rethrow could leak it).
+    Throwable leaf =
+        new IllegalStateException("ABFS GET abfss://cont@acct.dfs.core.windows.net/t?sig=DEEPSECRET");
+    Throwable mid = new java.io.IOException("write failed", leaf);
+    Throwable top = new RuntimeException("commit failed", mid);
+    String out = Redact.message(top);
+    assertFalse(out.contains("sig=DEEPSECRET"), "nested SAS must be redacted");
+    assertFalse(out.contains("acct.dfs.core.windows.net"), "nested storage host must be redacted");
+    assertTrue(out.contains("RuntimeException") && out.contains("IOException") && out.contains("IllegalStateException"),
+        "all cause levels should appear (redacted) for diagnosis");
+  }
 }
