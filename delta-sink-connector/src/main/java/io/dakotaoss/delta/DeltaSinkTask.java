@@ -4,6 +4,7 @@ import io.dakotaoss.delta.auth.CredentialProvider;
 import io.dakotaoss.delta.auth.Credentials;
 import io.dakotaoss.delta.model.TableTarget;
 import io.dakotaoss.delta.schema.RecordConverter;
+import io.dakotaoss.delta.schema.SchemaEvolution;
 import io.dakotaoss.delta.schema.SchemaMapper;
 import io.dakotaoss.delta.uc.TableResolver;
 import io.dakotaoss.delta.uc.UcColumnMapper;
@@ -73,6 +74,8 @@ public final class DeltaSinkTask extends SinkTask {
   private UnityCatalogClient uc;
   private UcTableResolver ucResolver;
   private boolean autoCreate;
+  // additive schema evolution policy (catalog-managed only); NONE = today's fail-closed DLQ routing.
+  private SchemaEvolution.Policy evolution = SchemaEvolution.Policy.NONE;
   private EngineProvider engineProvider;
   private DeltaKernelWriter writer;
   private String connectorName;
@@ -146,6 +149,7 @@ public final class DeltaSinkTask extends SinkTask {
     this.flushBytes = config.flushBytes();
     this.flushIntervalMs = config.flushIntervalMs();
     this.buffer = new RecordBuffer(flushBytes > 0);
+    this.evolution = SchemaEvolution.Policy.from(config.schemaEvolution());
     this.maintenance = Executors.newSingleThreadExecutor();
   }
 
@@ -202,6 +206,7 @@ public final class DeltaSinkTask extends SinkTask {
             uc, config.tableNameFormat(), config.topicToTable(), config.partitionColumns());
     this.resolver = ucResolver;
     this.autoCreate = config.autoCreateTables();
+    this.evolution = SchemaEvolution.Policy.from(config.schemaEvolution());
     this.engineProvider = EngineProvider.hadoop();
     this.writer = new DeltaKernelWriter();
     this.maintenance = Executors.newSingleThreadExecutor();
@@ -307,6 +312,27 @@ public final class DeltaSinkTask extends SinkTask {
     TableState st = stateFor(tp.topic());
     try {
       StructType kernelSchema = SchemaMapper.toKernel(refSchema);
+      // Additive schema evolution (catalog-managed only): if the incoming batch adds nullable columns,
+      // ALTER the table Databricks-side, then reload so the snapshot reflects the new schema/version
+      // before the append. A non-additive change is poison -> DLQ (or fail the task). The append's
+      // SetTransaction(appId, offset) makes a replay a no-op, and the column-present diff makes the
+      // re-evolve a no-op, so a replayed batch neither double-appends nor re-evolves.
+      if (st.committer != null && evolution == SchemaEvolution.Policy.ADD && uc != null) {
+        SchemaEvolution.Result ev = SchemaEvolution.diff(st.snapshot.getSchema(), kernelSchema);
+        if (ev.breaking) {
+          for (SinkRecord record : good) {
+            reportBad(record, new ConnectException("non-additive schema change; routed to DLQ"));
+          }
+          commitFlushed(tp, lastOffset);
+          LOG.warn("Flush for {} routed {} rows to DLQ (non-additive schema change)", tp, good.size());
+          return;
+        }
+        if (ev.changed()) {
+          alterAddColumns(st.target.fullName(), refSchema, ev.addedColumns);
+          tableStates.remove(tp.topic());
+          st = stateFor(tp.topic());
+        }
+      }
       FilteredColumnarBatch data = RecordConverter.toBatch(kernelSchema, refSchema, good);
       if (st.committer != null) {
         // Catalog-managed: reuse the in-memory snapshot, run backfill/checkpoint async. Invariant:
@@ -471,6 +497,44 @@ public final class DeltaSinkTask extends SinkTask {
     } catch (Exception e) {
       throw new ConnectException("auto-create failed for " + fullName + ": " + Redact.message(e));
     }
+  }
+
+  /**
+   * Add the (nullable) {@code columns} to a catalog-managed table via {@code ALTER TABLE ... ADD
+   * COLUMNS} on the SQL warehouse (schema.evolution). Databricks commits the DDL; the caller then
+   * reloads the snapshot and the normal append writes the wider rows -- no column mapping needed (the
+   * Kernel write path cannot touch a column-mapping table on 4.2.0). A concurrent evolver may have
+   * already added the columns; that "already exists" is benign (we reload and continue either way).
+   */
+  private void alterAddColumns(
+      String fullName, org.apache.kafka.connect.data.Schema valueSchema, List<String> columns) {
+    String ddl =
+        "ALTER TABLE " + fullName + " ADD COLUMNS ("
+            + UcColumnMapper.addColumnsDdl(valueSchema, columns) + ")";
+    try {
+      uc.executeStatement(config.warehouseId(), ddl);
+      LOG.info("Evolved {} (+columns {})", fullName, columns);
+    } catch (Exception e) {
+      if (alreadyExists(e)) {
+        LOG.info("Columns {} already present on {} (concurrent evolve); continuing", columns, fullName);
+        return;
+      }
+      throw new ConnectException("schema evolve failed for " + fullName + ": " + Redact.message(e));
+    }
+  }
+
+  /** A concurrent ALTER from another task can win the race; Databricks then rejects ours as a dup. */
+  private static boolean alreadyExists(Throwable t) {
+    for (Throwable c = t; c != null && c != c.getCause(); c = c.getCause()) {
+      String m = c.getMessage();
+      if (m != null) {
+        String s = m.toLowerCase(java.util.Locale.ROOT);
+        if (s.contains("already exists") || s.contains("fields_already_exist")) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   @Override

@@ -97,8 +97,13 @@ Poison rows / unwritable batches go to the DLQ when a reporter is configured, el
 - *Tests:* `DeltaSinkTaskTest.schemalessRecordIsRejected`, `DeltaSinkTaskConcurrencyTest.putThrowsRetriableOncePastTheBufferedCeiling`.
 
 ### R9 — Config validation
-`databricks.workspace.url` must be `https`; `topic.to.table` entries must be `<topic>:<catalog>.<schema>.<table>`; at least one flush dial must be enabled.
+`databricks.workspace.url` must be `https`; `topic.to.table` entries must be `<topic>:<catalog>.<schema>.<table>`; at least one flush dial must be enabled; `schema.evolution≠none` requires `databricks.warehouse.id`.
 - *Tests:* `DeltaSinkConfigTest`.
+
+### R10 — Additive schema evolution *(opt-in)*
+With `schema.evolution=add`, a catalog-managed flush whose records carry new **nullable, top-level** columns evolves the table via `ALTER TABLE … ADD COLUMNS` on a SQL warehouse, then appends; a non-additive change (drop/rename/type-change/non-null add) stays poison → DLQ. The schema change is done Databricks-side by DDL — **not** Kernel's `withUpdatedSchema`, which needs column mapping that Kernel 4.2.0 cannot even write into (see Decisions). `none` (default) preserves the fail-closed routing exactly. `SetTransaction(appId, offset)` + the column-present diff make a replay neither re-evolve nor double-append.
+- *Accept:* additive batch evolves + appends instead of DLQ-ing; breaking change still DLQs; replay does not re-evolve; `none` reproduces today's behavior.
+- *Tests:* `SchemaEvolutionTest`, `UcColumnMapperTest` (add-columns DDL), `DeltaSinkConfigTest`; end-to-end `LiveSchemaEvolutionTest` *(live only)*.
 
 ## Architecture
 
@@ -239,7 +244,8 @@ Config surface is `DeltaSinkConfig`. Defaults shown.
 | `flush.bytes` | long | 0 | approx buffered bytes before a commit, for target file size (e.g. 134217728 = 128 MiB); 0 disables |
 | `flush.interval.ms` | long | 5000 | max time to buffer a partition before committing |
 | `auto.create.tables` | boolean | true | create an absent catalog-managed table on first write, deriving schema + nullability from the record. Needs `databricks.warehouse.id` and `CREATE TABLE` on the schema. Set false to require pre-created tables |
-| `databricks.warehouse.id` | string | (empty) | SQL warehouse that runs the `CREATE TABLE` for `auto.create.tables` (Databricks initializes the catalog-managed table's v0; the connector then appends). Required only when auto-creating |
+| `databricks.warehouse.id` | string | (empty) | SQL warehouse that runs the `CREATE TABLE` for `auto.create.tables` and the `ALTER TABLE ADD COLUMNS` for `schema.evolution`. Required when auto-creating or evolving |
+| `schema.evolution` | string | `none` | `none` DLQs schema-mismatched rows (fail-closed); `add` evolves a catalog-managed table for new **nullable top-level** columns via `ALTER TABLE ADD COLUMNS`, then appends. Drops/renames/type-changes stay poison. Needs `databricks.warehouse.id` |
 
 **Three flush dials, whichever trips first.** `flush.size` and `flush.bytes` flush opportunistically
 inside `put` when a buffer fills. `flush.interval.ms` is enforced by a scheduler that flushes any
@@ -328,6 +334,19 @@ task instead splits it: commit synchronously, then publish/backfill + checkpoint
 holds the ratified commit durably regardless, so moving maintenance off the commit path keeps
 per-commit latency flat as the table grows.
 
+**Schema evolution via DDL vs Kernel `withUpdatedSchema`.** Additive evolution (R10) runs
+`ALTER TABLE ADD COLUMNS` on a SQL warehouse, then appends the wider rows through the normal write
+path — the same DDL-then-append split as `auto.create.tables`. The obvious alternative,
+Kernel's `UpdateTableTransactionBuilder.withUpdatedSchema`, is unusable on Kernel 4.2.0: it requires
+the table to have column mapping enabled (`"Cannot update schema … when column mapping is disabled"`),
+and Kernel 4.2.0's write path refuses a column-mapping table outright (`"Writing into column mapping
+enabled table is not supported yet"`) — verified empirically. So the only way the connector can both
+evolve and keep writing is to leave the table column-mapping-`none` and do the schema change
+Databricks-side. Adding a nullable column needs no column mapping, so this works on every catalog-managed
+table the connector already writes. Type widening is likewise out: Kernel 4.2.0's `isWriteCompatible`
+rejects every numeric type change even with a recorded `TypeChange`. Revisit `withUpdatedSchema` +
+widening on a Kernel version that supports column-mapping writes.
+
 ## CDC ingestion pattern
 
 Recommended source-side shape: apply the Debezium **ExtractNewRecordState** SMT to flatten the
@@ -415,9 +434,15 @@ path. Delta ignores uncommitted files; `VACUUM` removes them.
   `DeltaKernelWriter.append`.
 - **Metrics limited to three fields.** Only `operationMetrics`/`operationParameters`/`isBlindAppend` are
   controllable in `commitInfo`; the rest is fixed by Kernel's `CommitMetadata`.
-- **Schema evolution.** Additive evolution flows through; UC validates/rejects breaking changes at
-  commit. A rejected commit is routed to the DLQ by the generic fail-closed flush handler (no
-  auto-evolution or retry); automatic schema-evolution / retry is not yet built.
+- **Schema evolution.** Opt-in additive evolution (`schema.evolution=add`, R10) absorbs new nullable
+  top-level columns via `ALTER TABLE ADD COLUMNS` on a SQL warehouse, then appends. Two gaps remain:
+  (1) **Kernel cannot evolve on its write path** — `withUpdatedSchema` requires column mapping, and
+  Kernel 4.2.0 refuses to *write* a column-mapping table at all (`"Writing into column mapping enabled
+  table is not supported yet"`), so we evolve Databricks-side by DDL rather than through Kernel; revisit
+  on a Kernel that supports column-mapping writes. (2) **Type widening** is unavailable here too —
+  Kernel 4.2.0's `isWriteCompatible` rejects every numeric type change regardless of a recorded
+  `TypeChange`, so only additive (not widening) is offered; widening would also need the table's
+  `typeWidening` feature. Nested-struct changes and non-nullable adds stay breaking → DLQ.
 - **Nested collections.** STRUCT, ARRAY, and MAP map and write (recursively, bounded by the depth cap).
   Other Connect composite types (e.g. UNION) are still rejected at schema-map time.
 

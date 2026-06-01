@@ -34,6 +34,28 @@ class UcColumnMapperTest {
   }
 
   @Test
+  void addColumnsDdlEmitsOnlyNamedNullableColumns() {
+    Schema s =
+        SchemaBuilder.struct()
+            .field("id", Schema.INT32_SCHEMA)
+            .field("email", Schema.OPTIONAL_STRING_SCHEMA)
+            .field("phone", Schema.OPTIONAL_STRING_SCHEMA)
+            .build();
+    // additive ALTER ADD COLUMNS never emits NOT NULL (can't back-fill existing rows)
+    assertEquals(
+        "`email` STRING, `phone` STRING",
+        UcColumnMapper.addColumnsDdl(s, java.util.List.of("email", "phone")));
+  }
+
+  @Test
+  void addColumnsDdlRejectsUnknownColumn() {
+    Schema s = SchemaBuilder.struct().field("id", Schema.INT32_SCHEMA).build();
+    assertThrows(
+        org.apache.kafka.connect.errors.DataException.class,
+        () -> UcColumnMapper.addColumnsDdl(s, java.util.List.of("nope")));
+  }
+
+  @Test
   void rejectsArrayColumnUntilSupported() {
     Schema s =
         SchemaBuilder.struct()

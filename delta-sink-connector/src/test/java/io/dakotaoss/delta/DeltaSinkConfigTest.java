@@ -31,6 +31,27 @@ class DeltaSinkConfigTest {
   }
 
   @Test
+  void schemaEvolutionDefaultsToNone() {
+    assertEquals(DeltaSinkConfig.EVOLVE_NONE, new DeltaSinkConfig(required()).schemaEvolution());
+  }
+
+  @Test
+  void schemaEvolutionAddRequiresAWarehouse() {
+    Map<String, String> p = required();
+    p.put(DeltaSinkConfig.SCHEMA_EVOLUTION, DeltaSinkConfig.EVOLVE_ADD);
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p)); // no warehouse set
+    p.put(DeltaSinkConfig.WAREHOUSE_ID, "wh-1");
+    assertEquals(DeltaSinkConfig.EVOLVE_ADD, new DeltaSinkConfig(p).schemaEvolution());
+  }
+
+  @Test
+  void schemaEvolutionRejectsUnknownPolicy() {
+    Map<String, String> p = required();
+    p.put(DeltaSinkConfig.SCHEMA_EVOLUTION, "rename");
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+  }
+
+  @Test
   void overridesAreRead() {
     Map<String, String> p = required();
     p.put(DeltaSinkConfig.TABLE_NAME_FORMAT, "cat.sch.${topic}");

@@ -31,6 +31,10 @@ public final class DeltaSinkConfig extends AbstractConfig {
   public static final String AUTH_AZURE_ENTRA = "azure-entra";
   public static final String AUTO_CREATE_TABLES = "auto.create.tables";
   public static final String WAREHOUSE_ID = "databricks.warehouse.id";
+  public static final String SCHEMA_EVOLUTION = "schema.evolution";
+  // schema.evolution values
+  public static final String EVOLVE_NONE = "none";
+  public static final String EVOLVE_ADD = "add";
   public static final String TABLE_NAME_FORMAT = "table.name.format";
   public static final String TOPIC_TO_TABLE = "topic.to.table";
   public static final String PARTITION_COLUMNS = "partition.columns";
@@ -207,7 +211,18 @@ public final class DeltaSinkConfig extends AbstractConfig {
               "",
               ConfigDef.Importance.MEDIUM,
               "SQL warehouse id used to run CREATE TABLE for " + AUTO_CREATE_TABLES + " (Databricks "
-                  + "writes the table's v0). Required only when auto-creating an absent table.");
+                  + "writes the table's v0) and ALTER TABLE ADD COLUMNS for " + SCHEMA_EVOLUTION
+                  + ". Required when auto-creating an absent table or evolving its schema.")
+          .define(
+              SCHEMA_EVOLUTION,
+              ConfigDef.Type.STRING,
+              EVOLVE_NONE,
+              ConfigDef.ValidString.in(EVOLVE_NONE, EVOLVE_ADD),
+              ConfigDef.Importance.MEDIUM,
+              "Absorb additive schema changes on a catalog-managed table instead of DLQ-ing the "
+                  + "schema-mismatched rows. 'none' (default) keeps the fail-closed poison/DLQ behavior; "
+                  + "'add' runs ALTER TABLE ADD COLUMNS (via " + WAREHOUSE_ID + ") for new nullable "
+                  + "top-level columns, then appends. Drops/renames/narrowing/type-changes stay poison.");
 
   public DeltaSinkConfig(Map<String, String> props) {
     super(CONFIG_DEF, props);
@@ -218,6 +233,13 @@ public final class DeltaSinkConfig extends AbstractConfig {
           "At least one flush dial must be enabled (> 0): "
               + FLUSH_SIZE + ", " + FLUSH_BYTES + ", or " + FLUSH_INTERVAL_MS
               + "; all disabled would buffer unbounded.");
+    }
+    // schema.evolution runs ALTER TABLE on a SQL warehouse, so it needs one configured. Cross-field;
+    // fail at config time rather than on the first additive batch.
+    if (!EVOLVE_NONE.equals(schemaEvolution()) && warehouseId().isEmpty()) {
+      throw new ConfigException(
+          SCHEMA_EVOLUTION + "=" + schemaEvolution() + " requires " + WAREHOUSE_ID
+              + " (ALTER TABLE ADD COLUMNS runs on a SQL warehouse).");
     }
     // Each auth type needs a different set of fields; cross-field, so validate here rather than in
     // per-key Validators. Fail at config time, not on the first request.
@@ -305,5 +327,9 @@ public final class DeltaSinkConfig extends AbstractConfig {
 
   public String warehouseId() {
     return getString(WAREHOUSE_ID);
+  }
+
+  public String schemaEvolution() {
+    return getString(SCHEMA_EVOLUTION);
   }
 }

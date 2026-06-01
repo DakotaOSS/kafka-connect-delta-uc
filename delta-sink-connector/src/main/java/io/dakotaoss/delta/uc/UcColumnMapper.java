@@ -2,6 +2,7 @@ package io.dakotaoss.delta.uc;
 
 import io.dakotaoss.delta.util.Redact;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
@@ -34,6 +35,23 @@ public final class UcColumnMapper {
       // mirror the Connect schema's nullability so the created table matches SchemaMapper.toKernel
       // exactly (Kernel rejects a write whose schema differs, including non-null vs nullable).
       defs.add("`" + f.name() + "` " + sqlType(f.schema(), 0) + (f.schema().isOptional() ? "" : " NOT NULL"));
+    }
+    return String.join(", ", defs);
+  }
+
+  /**
+   * Column defs for just {@code columnNames}, for {@code ALTER TABLE ... ADD COLUMNS (...)}. The named
+   * fields must be nullable (added columns can't be NOT NULL on a table with existing rows), so no
+   * {@code NOT NULL} is emitted; an unknown name is a programming error.
+   */
+  public static String addColumnsDdl(Schema valueSchema, Collection<String> columnNames) {
+    List<String> defs = new ArrayList<>();
+    for (String name : columnNames) {
+      Field f = valueSchema.field(name);
+      if (f == null) {
+        throw new DataException("added column not in the record schema: " + name);
+      }
+      defs.add("`" + f.name() + "` " + sqlType(f.schema(), 0));
     }
     return String.join(", ", defs);
   }
