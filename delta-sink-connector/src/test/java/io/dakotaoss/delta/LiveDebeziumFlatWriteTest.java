@@ -83,22 +83,16 @@ class LiveDebeziumFlatWriteTest {
         new UnityCatalogCommitter(host, token, info.tableId, info.storageLocation, conf);
     UnityCatalogCommitter.CatalogState catalog = committer.catalogState();
 
-    DeltaKernelWriter.Result r =
-        new DeltaKernelWriter()
-            .appendCatalogManaged(
-                engine,
-                target.tablePath(),
-                fullName,
-                "debezium-flat",
-                now,
-                batch,
-                committer,
-                catalog.commits,
-                catalog.maxVersion);
+    DeltaKernelWriter w = new DeltaKernelWriter();
+    io.delta.kernel.Snapshot snapshot =
+        w.loadCatalogSnapshot(engine, target.tablePath(), committer, catalog.commits, catalog.maxVersion);
+    io.delta.kernel.TransactionCommitResult result =
+        w.appendToSnapshot(engine, snapshot, batch, "debezium-flat", now);
+    w.maintain(engine, result);
 
-    assertTrue(r.version >= 1, "commit should produce a table version");
+    assertTrue(result != null && result.getVersion() >= 1, "commit should produce a table version");
     System.out.println(
-        "[LIVE] flattened Debezium rows committed to " + fullName + " at version " + r.version);
+        "[LIVE] flattened Debezium rows committed to " + fullName + " at version " + result.getVersion());
   }
 
   private static SinkRecord rec(

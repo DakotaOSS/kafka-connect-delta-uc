@@ -79,11 +79,13 @@ class LiveMultiTableRoutingTest {
     UnityCatalogCommitter committer =
         new UnityCatalogCommitter(host, token, target.tableId(), target.tablePath(), conf);
     UnityCatalogCommitter.CatalogState cs = committer.catalogState();
-    return new DeltaKernelWriter()
-        .appendCatalogManaged(
-            engine, target.tablePath(), target.fullName(), appId, System.currentTimeMillis(), batch,
-            committer, cs.commits, cs.maxVersion)
-        .version;
+    DeltaKernelWriter w = new DeltaKernelWriter();
+    io.delta.kernel.Snapshot snapshot =
+        w.loadCatalogSnapshot(engine, target.tablePath(), committer, cs.commits, cs.maxVersion);
+    io.delta.kernel.TransactionCommitResult result =
+        w.appendToSnapshot(engine, snapshot, batch, appId, System.currentTimeMillis());
+    w.maintain(engine, result);
+    return result == null ? -1L : result.getVersion();
   }
 
   private static FilteredColumnarBatch smokeBatch() {
