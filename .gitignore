@@ -22,3 +22,6 @@ Thumbs.db
 
 # Logs / scratch
 *.log
+
+# Local-only operational notes (e.g. test infra catalog); never committed
+*.local.md
