@@ -21,6 +21,14 @@ public final class DeltaSinkConfig extends AbstractConfig {
 
   public static final String WORKSPACE_URL = "databricks.workspace.url";
   public static final String TOKEN = "databricks.token";
+  public static final String AUTH_TYPE = "databricks.auth.type";
+  public static final String CLIENT_ID = "databricks.client.id";
+  public static final String CLIENT_SECRET = "databricks.client.secret";
+  public static final String AZURE_TENANT_ID = "azure.tenant.id";
+  // databricks.auth.type values
+  public static final String AUTH_PAT = "pat";
+  public static final String AUTH_OAUTH_M2M = "oauth-m2m";
+  public static final String AUTH_AZURE_ENTRA = "azure-entra";
   public static final String TABLE_NAME_FORMAT = "table.name.format";
   public static final String TOPIC_TO_TABLE = "topic.to.table";
   public static final String PARTITION_COLUMNS = "partition.columns";
@@ -102,9 +110,40 @@ public final class DeltaSinkConfig extends AbstractConfig {
           .define(
               TOKEN,
               ConfigDef.Type.PASSWORD,
+              "",
               ConfigDef.Importance.HIGH,
-              "OAuth/PAT bearer token for the Unity Catalog REST API. Principal must hold "
+              "Bearer token for the Unity Catalog REST API (a PAT or long-lived service-principal "
+                  + "token); used when " + AUTH_TYPE + "=" + AUTH_PAT + ". Principal must hold "
                   + "EXTERNAL USE SCHEMA on the target schema.")
+          .define(
+              AUTH_TYPE,
+              ConfigDef.Type.STRING,
+              AUTH_PAT,
+              ConfigDef.ValidString.in(AUTH_PAT, AUTH_OAUTH_M2M, AUTH_AZURE_ENTRA),
+              ConfigDef.Importance.HIGH,
+              "How to obtain the bearer token. '" + AUTH_PAT + "': use " + TOKEN + " as-is. '"
+                  + AUTH_OAUTH_M2M + "': Databricks service-principal OAuth (client-credentials at "
+                  + "{workspace}/oidc/v1/token); the connector mints and refreshes tokens. '"
+                  + AUTH_AZURE_ENTRA + "': Microsoft Entra service-principal OAuth for the Azure "
+                  + "Databricks resource. The oauth/entra modes refresh on their own before expiry.")
+          .define(
+              CLIENT_ID,
+              ConfigDef.Type.STRING,
+              "",
+              ConfigDef.Importance.MEDIUM,
+              "Service-principal client/application id for " + AUTH_OAUTH_M2M + " / " + AUTH_AZURE_ENTRA + ".")
+          .define(
+              CLIENT_SECRET,
+              ConfigDef.Type.PASSWORD,
+              "",
+              ConfigDef.Importance.MEDIUM,
+              "Service-principal client secret for " + AUTH_OAUTH_M2M + " / " + AUTH_AZURE_ENTRA + ".")
+          .define(
+              AZURE_TENANT_ID,
+              ConfigDef.Type.STRING,
+              "",
+              ConfigDef.Importance.MEDIUM,
+              "Microsoft Entra tenant id; required for " + AUTH_AZURE_ENTRA + ".")
           .define(
               TABLE_NAME_FORMAT,
               ConfigDef.Type.STRING,
@@ -163,6 +202,30 @@ public final class DeltaSinkConfig extends AbstractConfig {
               + FLUSH_SIZE + ", " + FLUSH_BYTES + ", or " + FLUSH_INTERVAL_MS
               + "; all disabled would buffer unbounded.");
     }
+    // Each auth type needs a different set of fields; cross-field, so validate here rather than in
+    // per-key Validators. Fail at config time, not on the first request.
+    switch (authType()) {
+      case AUTH_PAT:
+        requireSet(TOKEN, token().value());
+        break;
+      case AUTH_OAUTH_M2M:
+        requireSet(CLIENT_ID, getString(CLIENT_ID));
+        requireSet(CLIENT_SECRET, clientSecret().value());
+        break;
+      case AUTH_AZURE_ENTRA:
+        requireSet(AZURE_TENANT_ID, getString(AZURE_TENANT_ID));
+        requireSet(CLIENT_ID, getString(CLIENT_ID));
+        requireSet(CLIENT_SECRET, clientSecret().value());
+        break;
+      default:
+        break; // ValidString already constrains AUTH_TYPE to the known set
+    }
+  }
+
+  private void requireSet(String key, String value) {
+    if (value == null || value.isEmpty()) {
+      throw new ConfigException(key + " is required when " + AUTH_TYPE + "=" + authType());
+    }
   }
 
   public String workspaceUrl() {
@@ -171,6 +234,22 @@ public final class DeltaSinkConfig extends AbstractConfig {
 
   public Password token() {
     return getPassword(TOKEN);
+  }
+
+  public String authType() {
+    return getString(AUTH_TYPE);
+  }
+
+  public String clientId() {
+    return getString(CLIENT_ID);
+  }
+
+  public Password clientSecret() {
+    return getPassword(CLIENT_SECRET);
+  }
+
+  public String azureTenantId() {
+    return getString(AZURE_TENANT_ID);
   }
 
   public String tableNameFormat() {
