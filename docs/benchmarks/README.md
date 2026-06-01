@@ -94,8 +94,8 @@ under a single lock (the head-of-line cost this connector pays for strict per-pa
 
 The headline is the **CPU column: 2–3% average** (peak 42–86% on brief commit bursts). The worker is
 **WAN-latency-bound, not CPU-bound** — it spends nearly all its time waiting on cross-region ADLS +
-UC round-trips, not computing. Heap scales roughly linearly with table count (per-table snapshot state
-+ Parquet buffers), so density, not CPU, is the ceiling on tables-per-worker. Two consequences: (1)
+UC round-trips, not computing. Heap scales roughly linearly with table count (per-table snapshot
+state and Parquet buffers), so density, not CPU, is the ceiling on tables-per-worker. Two consequences: (1)
 in-region deployment, where round-trips are ~1 ms instead of ~50 ms, should multiply these numbers;
 (2) the serialized flush leaves throughput on the table — concurrent per-partition commits are the
 obvious next optimization.
