@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
@@ -57,11 +58,13 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
   private final URI tableUri;
   private final Configuration hadoopConf;
   // Highest version this committer has backfilled to the published log; told to UC on the next commit
-  // so getCommits stops returning already-published commits.
-  private long highestPublishedVersion = -1;
+  // so getCommits stops returning already-published commits. Written on the async maintenance thread
+  // (publish) and read on the commit thread -> atomic. A stale read only widens UC's prune hint, which
+  // is harmless, so plain get/accumulate (no lock) is enough.
+  final AtomicLong highestPublishedVersion = new AtomicLong(-1);
   // Per-commit metrics supplied by the writer immediately before commit; consumed once so the
   // emitted commitInfo carries operationMetrics. -1 = not supplied (pass actions through unchanged).
-  private long pendingNumRows = -1;
+  long pendingNumRows = -1;
   private long pendingNumFiles = -1;
   private long pendingNumBytes = -1;
 
@@ -96,6 +99,15 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
       String tableStorageLocation,
       Configuration hadoopConf) {
     this(workspaceUrl, () -> token, tableId, tableStorageLocation, hadoopConf);
+  }
+
+  // visible for tests: inject a UCClient (e.g. a fake) instead of opening a real UCTokenBasedRestClient.
+  UnityCatalogCommitter(
+      String tableId, String tableStorageLocation, Configuration hadoopConf, UCClient ucClient) {
+    this.tableId = tableId;
+    this.tableUri = URI.create(tableStorageLocation);
+    this.hadoopConf = hadoopConf;
+    this.ucClient = ucClient;
   }
 
   /** What UC knows about a table's log: the ratified (staged, not-yet-published) commits + latest version. */
@@ -162,7 +174,7 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
             org.apache.hadoop.fs.FSDataOutputStream out = fs.create(target, false)) {
           org.apache.hadoop.io.IOUtils.copyBytes(in, out, hadoopConf, false);
         }
-        highestPublishedVersion = Math.max(highestPublishedVersion, c.getVersion());
+        highestPublishedVersion.accumulateAndGet(c.getVersion(), Math::max);
       }
     } catch (Exception e) {
       throw new PublishFailedException("UC publish (backfill) failed for " + tableId, e);
@@ -196,8 +208,8 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
 
       // 3. Ask UC to ratify at the target version (first-writer-wins).
       Commit commit = new Commit(version, staged, commitTs);
-      Optional<Long> backfilled =
-          highestPublishedVersion >= 0 ? Optional.of(highestPublishedVersion) : Optional.<Long>empty();
+      long hpv = highestPublishedVersion.get();
+      Optional<Long> backfilled = hpv >= 0 ? Optional.of(hpv) : Optional.<Long>empty();
       ucClient.commit(
           tableId,
           tableUri,
@@ -240,7 +252,7 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
    * Spark-written tables populate them, so match that for a consistent Delta history. Pass-through
    * when the writer supplied no metrics.
    */
-  private CloseableIterator<Row> enrich(CloseableIterator<Row> actions, CommitMetadata commitMetadata) {
+  CloseableIterator<Row> enrich(CloseableIterator<Row> actions, CommitMetadata commitMetadata) {
     if (pendingNumRows < 0) {
       return actions;
     }
@@ -265,7 +277,7 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
     return Iters.closeable(out.iterator());
   }
 
-  private CommitInfo enrichedCommitInfo(CommitMetadata commitMetadata) {
+  CommitInfo enrichedCommitInfo(CommitMetadata commitMetadata) {
     CommitInfo base = commitMetadata.getCommitInfo();
     Map<String, String> params = new HashMap<>(base.getOperationParameters());
     params.putIfAbsent("mode", "Append");

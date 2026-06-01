@@ -24,8 +24,6 @@ import io.delta.storage.commit.Commit;
 import io.delta.storage.commit.GetCommitsResponse;
 import io.delta.storage.commit.uccommitcoordinator.UCClient;
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -56,7 +54,7 @@ class UnityCatalogCommitterTest {
     UnityCatalogCommitter committer = committer("file:/tmp/unused");
     committer.setPendingMetrics(42, 3, 4096);
 
-    CommitInfo enriched = enrichedCommitInfo(committer, commitMetadata(operationParams()));
+    CommitInfo enriched = committer.enrichedCommitInfo(commitMetadata(operationParams()));
 
     assertEquals("42", enriched.getOperationMetrics().get("numOutputRows"));
     assertEquals("3", enriched.getOperationMetrics().get("numFiles"));
@@ -77,7 +75,7 @@ class UnityCatalogCommitterTest {
     Row commitInfoRow = SingleAction.createCommitInfoSingleAction(baseCommitInfo(operationParams()).toRow());
     Row nonCommitInfoRow = nonCommitInfoRow();
 
-    List<Row> out = drain(enrich(committer, actions(commitInfoRow, nonCommitInfoRow), commitMetadata(operationParams())));
+    List<Row> out = drain(committer.enrich(actions(commitInfoRow, nonCommitInfoRow), commitMetadata(operationParams())));
 
     assertEquals(2, out.size());
     // the non-commit-info action is forwarded by identity; the commit-info action is replaced with a
@@ -94,19 +92,19 @@ class UnityCatalogCommitterTest {
 
     // no metrics supplied -> pass-through: the same iterator instance is returned untouched.
     CloseableIterator<Row> bare = actions(nonCommitInfoRow());
-    assertSame(bare, enrich(committer, bare, commitMetadata(operationParams())));
+    assertSame(bare, committer.enrich(bare, commitMetadata(operationParams())));
 
     // supply metrics, enrich once: the commit-info row is swapped (a new instance), then reset.
     committer.setPendingMetrics(7, 1, 70);
     Row ci = SingleAction.createCommitInfoSingleAction(baseCommitInfo(operationParams()).toRow());
-    List<Row> first = drain(enrich(committer, actions(ci), commitMetadata(operationParams())));
+    List<Row> first = drain(committer.enrich(actions(ci), commitMetadata(operationParams())));
     assertFalse(first.get(0).isNullAt(SingleAction.COMMIT_INFO_ORDINAL));
 
     // metrics were consumed: a second call with no new setPendingMetrics is a pass-through again.
     CloseableIterator<Row> again = actions(nonCommitInfoRow());
-    assertSame(again, enrich(committer, again, commitMetadata(operationParams())));
-    // and reflect the reset directly: -1 == not supplied.
-    assertEquals(-1L, longField(committer, "pendingNumRows"));
+    assertSame(again, committer.enrich(again, commitMetadata(operationParams())));
+    // and the reset is visible: -1 == not supplied.
+    assertEquals(-1L, committer.pendingNumRows);
   }
 
   // ---- catalogState: ascending sort + already-published dedup ----------------------------------
@@ -126,8 +124,9 @@ class UnityCatalogCommitterTest {
     newestFirst.add(stagedCommit(logPath, 2));
     newestFirst.add(stagedCommit(logPath, 1));
     newestFirst.add(stagedCommit(logPath, 0));
-    UnityCatalogCommitter committer = committer(tableUri);
-    injectClient(committer, new FakeUCClient(new GetCommitsResponse(newestFirst, 2)));
+    UnityCatalogCommitter committer =
+        new UnityCatalogCommitter(
+            "table-id", tableUri, new Configuration(), new FakeUCClient(new GetCommitsResponse(newestFirst, 2)));
 
     UnityCatalogCommitter.CatalogState state = committer.catalogState();
 
@@ -164,7 +163,7 @@ class UnityCatalogCommitterTest {
     assertEquals("staged-1",
         new String(Files.readAllBytes(logDir.resolve(String.format("%020d.json", 1L))), StandardCharsets.UTF_8));
     // highestPublishedVersion advances to the max version copied (told to UC on the next commit).
-    assertEquals(1L, longField(committer, "highestPublishedVersion"));
+    assertEquals(1L, committer.highestPublishedVersion.get());
   }
 
   // ---- fixtures --------------------------------------------------------------------------------
@@ -244,35 +243,6 @@ class UnityCatalogCommitterTest {
   @SuppressWarnings("unchecked")
   private static List<ParsedCatalogCommitData> asCatalog(List<?> commits) {
     return (List<ParsedCatalogCommitData>) commits;
-  }
-
-  // ---- reflection seams (private members; no production seam added) ----------------------------
-
-  private static CommitInfo enrichedCommitInfo(UnityCatalogCommitter c, CommitMetadata cm) throws Exception {
-    Method m = UnityCatalogCommitter.class.getDeclaredMethod("enrichedCommitInfo", CommitMetadata.class);
-    m.setAccessible(true);
-    return (CommitInfo) m.invoke(c, cm);
-  }
-
-  @SuppressWarnings("unchecked")
-  private static CloseableIterator<Row> enrich(
-      UnityCatalogCommitter c, CloseableIterator<Row> actions, CommitMetadata cm) throws Exception {
-    Method m = UnityCatalogCommitter.class.getDeclaredMethod(
-        "enrich", CloseableIterator.class, CommitMetadata.class);
-    m.setAccessible(true);
-    return (CloseableIterator<Row>) m.invoke(c, actions, cm);
-  }
-
-  private static void injectClient(UnityCatalogCommitter c, UCClient client) throws Exception {
-    Field f = UnityCatalogCommitter.class.getDeclaredField("ucClient");
-    f.setAccessible(true);
-    f.set(c, client);
-  }
-
-  private static long longField(UnityCatalogCommitter c, String name) throws Exception {
-    Field f = UnityCatalogCommitter.class.getDeclaredField(name);
-    f.setAccessible(true);
-    return f.getLong(c);
   }
 
   // ---- minimal Kernel stubs --------------------------------------------------------------------
