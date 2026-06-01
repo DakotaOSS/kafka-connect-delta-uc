@@ -17,3 +17,8 @@ repro steps. Expect an acknowledgement within a few business days; we'll coordin
 from there.
 
 When reporting, redact any tokens, SAS, or storage paths from logs and stack traces.
+
+## Threat model
+
+Trust boundaries, the token-as-only-authz-boundary, vended-SAS scoping, untrusted-producer-data
+handling, and residual risks are documented in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
