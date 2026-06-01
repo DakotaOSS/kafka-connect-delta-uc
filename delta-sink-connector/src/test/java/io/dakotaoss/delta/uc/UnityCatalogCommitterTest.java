@@ -3,6 +3,7 @@ package io.dakotaoss.delta.uc;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.dakotaoss.delta.data.Iters;
 import io.delta.kernel.commit.CommitMetadata;
@@ -164,6 +165,20 @@ class UnityCatalogCommitterTest {
         new String(Files.readAllBytes(logDir.resolve(String.format("%020d.json", 1L))), StandardCharsets.UTF_8));
     // highestPublishedVersion advances to the max version copied (told to UC on the next commit).
     assertEquals(1L, committer.highestPublishedVersion.get());
+  }
+
+  // ---- auth failures are non-retryable (fail fast instead of storming) -------------------------
+
+  @Test
+  void authFailureDetectedAnywhereInCauseChain() {
+    assertTrue(UnityCatalogCommitter.isAuthFailure(new RuntimeException("ApiException: 401 Unauthorized")));
+    assertTrue(
+        UnityCatalogCommitter.isAuthFailure(
+            new RuntimeException("commit failed", new java.io.IOException("Token is expired"))));
+    assertTrue(UnityCatalogCommitter.isAuthFailure(new RuntimeException("oidc error: invalid_client")));
+    // a real conflict is retryable -- must not be misclassified as auth
+    assertFalse(UnityCatalogCommitter.isAuthFailure(new RuntimeException("version 5 already exists; conflict")));
+    assertFalse(UnityCatalogCommitter.isAuthFailure(null));
   }
 
   // ---- fixtures --------------------------------------------------------------------------------

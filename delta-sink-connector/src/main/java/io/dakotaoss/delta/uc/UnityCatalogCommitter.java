@@ -228,12 +228,38 @@ public final class UnityCatalogCommitter implements CatalogCommitter {
       return new CommitResponse(ParsedDeltaData.forFileStatus(kernelStatus));
 
     } catch (io.delta.storage.commit.CommitFailedException e) {
+      // An auth (401) failure is not transient -- retrying the same expired/revoked/skewed token just
+      // storms in Kernel's commitWithRetry. Force it non-retryable so the task fails fast and the next
+      // flush re-resolves (re-vending creds + re-minting the token), even if the SDK marked it retryable.
       // Redact: UC/ABFS error text can carry a vended SAS or bearer token.
-      throw new CommitFailedException(e.getRetryable(), e.getConflict(), Redact.text(e.getMessage()), e);
+      boolean retryable = e.getRetryable() && !isAuthFailure(e);
+      throw new CommitFailedException(retryable, e.getConflict(), Redact.text(e.getMessage()), e);
     } catch (Exception e) {
       throw new CommitFailedException(
           false, false, "UC catalog commit failed: " + Redact.message(e), e);
     }
+  }
+
+  /**
+   * A 401/Unauthorized anywhere in the cause chain. Such a failure is not transient: the token is
+   * expired/revoked/clock-skewed, so re-committing with the same token only storms. Treated as
+   * non-retryable so the commit fails fast (the task then re-resolves with a fresh token).
+   */
+  static boolean isAuthFailure(Throwable t) {
+    for (Throwable c = t; c != null; c = c.getCause()) {
+      String m = c.getMessage();
+      if (m != null) {
+        String s = m.toLowerCase(java.util.Locale.ROOT);
+        if (s.contains("401") || s.contains("unauthorized") || s.contains("token is expired")
+            || s.contains("invalid_client")) {
+          return true;
+        }
+      }
+      if (c.getCause() == c) {
+        break;
+      }
+    }
+    return false;
   }
 
   /**
