@@ -7,13 +7,13 @@ import org.apache.hadoop.fs.azurebfs.extensions.SASTokenProvider;
 
 /**
  * ABFS {@link SASTokenProvider} that hands back each table's vended, directory-scoped SAS from
- * {@link VendedSasStore} at the request boundary. Wired per host via
- * {@code fs.azure.sas.token.provider.type.<host>} (+ {@code account.auth.type=SAS}).
+ * {@link VendedSasStore} at the request boundary. Wired per host via {@code
+ * fs.azure.sas.token.provider.type.<host>} (+ {@code account.auth.type=SAS}).
  *
- * <p>This replaces the {@code fs.azure.sas.fixed.token.<host>} config key: the SAS stays in the store
- * (out of the Hadoop {@code Configuration}), and because the provider disambiguates by request path,
- * one cached FileSystem per storage host can serve many tables — so the JVM-global FS-cache disable is
- * no longer needed.
+ * <p>This replaces the {@code fs.azure.sas.fixed.token.<host>} config key: the SAS stays in the
+ * store (out of the Hadoop {@code Configuration}), and because the provider disambiguates by
+ * request path, one cached FileSystem per storage host can serve many tables — so the JVM-global
+ * FS-cache disable is no longer needed.
  *
  * <p>ABFS instantiates this by reflection, hence the public no-arg constructor (naming Hadoop's own
  * {@code services.FixedSASTokenProvider} for the provider type fails for lack of one).

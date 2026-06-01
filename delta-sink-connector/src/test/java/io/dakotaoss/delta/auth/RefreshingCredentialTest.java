@@ -75,7 +75,8 @@ class RefreshingCredentialTest {
     assertEquals("t1", c.get());
     now.set(85_000); // past refresh (80s), before expiry (100s)
     m.fail = true;
-    assertEquals("t1", c.get(), "serve the still-valid cached token through a transient mint failure");
+    assertEquals(
+        "t1", c.get(), "serve the still-valid cached token through a transient mint failure");
   }
 
   @Test

@@ -4,12 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.dakotaoss.delta.schema.SchemaEvolution.Policy;
+import io.dakotaoss.delta.schema.SchemaEvolution.Result;
 import io.delta.kernel.types.IntegerType;
 import io.delta.kernel.types.LongType;
 import io.delta.kernel.types.StringType;
 import io.delta.kernel.types.StructType;
-import io.dakotaoss.delta.schema.SchemaEvolution.Policy;
-import io.dakotaoss.delta.schema.SchemaEvolution.Result;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 

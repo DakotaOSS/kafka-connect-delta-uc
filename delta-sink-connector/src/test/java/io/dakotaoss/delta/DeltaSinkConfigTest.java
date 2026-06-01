@@ -121,7 +121,9 @@ class DeltaSinkConfigTest {
   @Test
   void patRequiresToken() {
     Map<String, String> p = new HashMap<>();
-    p.put(DeltaSinkConfig.WORKSPACE_URL, "https://adb-1.azuredatabricks.net"); // no token, default pat
+    p.put(
+        DeltaSinkConfig.WORKSPACE_URL,
+        "https://adb-1.azuredatabricks.net"); // no token, default pat
     assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
   }
 

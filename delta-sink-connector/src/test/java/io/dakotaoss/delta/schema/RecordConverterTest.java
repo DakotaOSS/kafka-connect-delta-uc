@@ -31,7 +31,10 @@ class RecordConverterTest {
 
   @Test
   void convertsDateToEpochDays() {
-    assertEquals(2, RecordConverter.convert(org.apache.kafka.connect.data.Date.SCHEMA, new Date(2L * 86_400_000L)));
+    assertEquals(
+        2,
+        RecordConverter.convert(
+            org.apache.kafka.connect.data.Date.SCHEMA, new Date(2L * 86_400_000L)));
   }
 
   @Test

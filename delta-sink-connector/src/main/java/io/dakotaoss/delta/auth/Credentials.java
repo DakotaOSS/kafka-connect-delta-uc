@@ -14,13 +14,15 @@ public final class Credentials {
         return new StaticCredential(() -> c.token().value());
       case DeltaSinkConfig.AUTH_OAUTH_M2M:
         return new RefreshingCredential(
-            new DatabricksOAuthMinter(c.workspaceUrl(), c.clientId(), () -> c.clientSecret().value()));
+            new DatabricksOAuthMinter(
+                c.workspaceUrl(), c.clientId(), () -> c.clientSecret().value()));
       case DeltaSinkConfig.AUTH_AZURE_ENTRA:
         return new RefreshingCredential(
             new AzureEntraMinter(c.azureTenantId(), c.clientId(), () -> c.clientSecret().value()));
       default:
         // unreachable: DeltaSinkConfig validates auth.type against the known set.
-        throw new IllegalStateException("unknown " + DeltaSinkConfig.AUTH_TYPE + ": " + c.authType());
+        throw new IllegalStateException(
+            "unknown " + DeltaSinkConfig.AUTH_TYPE + ": " + c.authType());
     }
   }
 }

@@ -21,13 +21,14 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 /**
  * Live: with {@code schema.evolution=add}, a second flush whose records carry a new nullable column
- * evolves the catalog-managed table via {@code ALTER TABLE ADD COLUMNS} (on a SQL warehouse) and then
- * appends -- instead of DLQ-ing the wider rows. Proves the REST/DDL evolution path end to end (no
- * column mapping, which Kernel 4.2.0 cannot write). Skipped unless {@code DATABRICKS_HOST} is set.
+ * evolves the catalog-managed table via {@code ALTER TABLE ADD COLUMNS} (on a SQL warehouse) and
+ * then appends -- instead of DLQ-ing the wider rows. Proves the REST/DDL evolution path end to end
+ * (no column mapping, which Kernel 4.2.0 cannot write). Skipped unless {@code DATABRICKS_HOST} is
+ * set.
  *
  * <p>Env: {@code DATABRICKS_HOST}, {@code DATABRICKS_TOKEN}, optional {@code UC_SCHEMA} (default
- * {@code teck_testing.cdc}) and {@code UC_WAREHOUSE}. The principal needs CREATE TABLE + EXTERNAL USE
- * SCHEMA on the schema.
+ * {@code teck_testing.cdc}) and {@code UC_WAREHOUSE}. The principal needs CREATE TABLE + EXTERNAL
+ * USE SCHEMA on the schema.
  */
 class LiveSchemaEvolutionTest {
 
@@ -66,11 +67,17 @@ class LiveSchemaEvolutionTest {
             .build();
 
     SinkRecord r1 =
-        new SinkRecord("t", 0, null, null, v1, new Struct(v1).put("id", 1).put("name", "before"), 0L);
+        new SinkRecord(
+            "t", 0, null, null, v1, new Struct(v1).put("id", 1).put("name", "before"), 0L);
     SinkRecord r2 =
         new SinkRecord(
-            "t", 0, null, null, v2,
-            new Struct(v2).put("id", 2).put("name", "after").put("email", "e@x.example"), 1L);
+            "t",
+            0,
+            null,
+            null,
+            v2,
+            new Struct(v2).put("id", 2).put("name", "after").put("email", "e@x.example"),
+            1L);
 
     DeltaSinkTask task = new DeltaSinkTask();
     try {
@@ -79,11 +86,14 @@ class LiveSchemaEvolutionTest {
       task.put(List.of(r2)); // diff sees +email -> ALTER ADD COLUMNS, reload, append v2
       Map<TopicPartition, OffsetAndMetadata> safe = task.preCommit(Map.of());
       assertEquals(
-          2L, safe.get(new TopicPartition("t", 0)).offset(), "both writes committed; offset advances");
+          2L,
+          safe.get(new TopicPartition("t", 0)).offset(),
+          "both writes committed; offset advances");
 
       // the table now carries the evolved column (proves the ALTER ran, not a DLQ)
       String meta = getTable(host, token, fullName);
-      assertTrue(meta.contains("\"name\":\"email\""), "evolved column present in UC table metadata");
+      assertTrue(
+          meta.contains("\"name\":\"email\""), "evolved column present in UC table metadata");
       System.out.println("[LIVE] evolved " + fullName + " (+email) and appended");
     } finally {
       task.stop();

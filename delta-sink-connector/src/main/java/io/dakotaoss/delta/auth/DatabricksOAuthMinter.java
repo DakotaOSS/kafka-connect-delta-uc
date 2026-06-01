@@ -13,10 +13,10 @@ import java.util.Base64;
 import java.util.function.Supplier;
 
 /**
- * OAuth2 client-credentials against the workspace's own token endpoint
- * ({@code {workspaceUrl}/oidc/v1/token}, scope {@code all-apis}) — Databricks-native service-principal
- * auth, cloud-agnostic. The client secret is read per mint from a {@link Supplier} so no extra durable
- * copy is held.
+ * OAuth2 client-credentials against the workspace's own token endpoint ({@code
+ * {workspaceUrl}/oidc/v1/token}, scope {@code all-apis}) — Databricks-native service-principal
+ * auth, cloud-agnostic. The client secret is read per mint from a {@link Supplier} so no extra
+ * durable copy is held.
  */
 public final class DatabricksOAuthMinter implements TokenMinter {
 
@@ -27,14 +27,22 @@ public final class DatabricksOAuthMinter implements TokenMinter {
   private final Supplier<String> clientSecret;
   private final HttpClient http;
 
-  public DatabricksOAuthMinter(String workspaceUrl, String clientId, Supplier<String> clientSecret) {
-    this(workspaceUrl, clientId, clientSecret,
+  public DatabricksOAuthMinter(
+      String workspaceUrl, String clientId, Supplier<String> clientSecret) {
+    this(
+        workspaceUrl,
+        clientId,
+        clientSecret,
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build());
   }
 
   // visible for tests: inject an HttpClient pointed at a local stub.
-  DatabricksOAuthMinter(String workspaceUrl, String clientId, Supplier<String> clientSecret, HttpClient http) {
-    String base = workspaceUrl.endsWith("/") ? workspaceUrl.substring(0, workspaceUrl.length() - 1) : workspaceUrl;
+  DatabricksOAuthMinter(
+      String workspaceUrl, String clientId, Supplier<String> clientSecret, HttpClient http) {
+    String base =
+        workspaceUrl.endsWith("/")
+            ? workspaceUrl.substring(0, workspaceUrl.length() - 1)
+            : workspaceUrl;
     this.tokenUrl = base + "/oidc/v1/token";
     this.clientId = clientId;
     this.clientSecret = clientSecret;
@@ -51,15 +59,16 @@ public final class DatabricksOAuthMinter implements TokenMinter {
             .timeout(Duration.ofSeconds(30))
             .header("Authorization", "Basic " + basic)
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .POST(HttpRequest.BodyPublishers.ofString("grant_type=client_credentials&scope=all-apis"))
+            .POST(
+                HttpRequest.BodyPublishers.ofString("grant_type=client_credentials&scope=all-apis"))
             .build();
     return parse(http.send(req, HttpResponse.BodyHandlers.ofString()));
   }
 
   /**
-   * Parse a standard OAuth2 token response ({@code access_token} + {@code expires_in}). Never include
-   * the response body in an error: it carries the access token. Shared by {@link AzureEntraMinter},
-   * which returns the same shape.
+   * Parse a standard OAuth2 token response ({@code access_token} + {@code expires_in}). Never
+   * include the response body in an error: it carries the access token. Shared by {@link
+   * AzureEntraMinter}, which returns the same shape.
    */
   static Minted parse(HttpResponse<String> resp) throws IOException {
     if (resp.statusCode() / 100 != 2) {

@@ -1,11 +1,6 @@
 package io.dakotaoss.delta;
 
 import io.dakotaoss.delta.util.Redact;
-import org.apache.kafka.common.config.AbstractConfig;
-import org.apache.kafka.common.config.ConfigDef;
-import org.apache.kafka.common.config.ConfigException;
-import org.apache.kafka.common.config.types.Password;
-
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Collections;
@@ -15,6 +10,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.apache.kafka.common.config.AbstractConfig;
+import org.apache.kafka.common.config.ConfigDef;
+import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.config.types.Password;
 
 /** Configuration surface for the DeltaTables sink connector. */
 public final class DeltaSinkConfig extends AbstractConfig {
@@ -44,7 +43,8 @@ public final class DeltaSinkConfig extends AbstractConfig {
   public static final String FLUSH_CONCURRENCY = "flush.concurrency";
 
   // UC REST + credential vending assume TLS; reject http:// and scheme-less values at config time
-  // rather than failing later on the first request. Redact the echoed value in case a token rode in.
+  // rather than failing later on the first request. Redact the echoed value in case a token rode
+  // in.
   private static final ConfigDef.Validator HTTPS_URL =
       new ConfigDef.Validator() {
         @Override
@@ -61,7 +61,9 @@ public final class DeltaSinkConfig extends AbstractConfig {
           }
           if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) {
             throw new ConfigException(
-                name, Redact.text(s), "must be an https:// URL with a host (http:// is not allowed)");
+                name,
+                Redact.text(s),
+                "must be an https:// URL with a host (http:// is not allowed)");
           }
         }
 
@@ -73,7 +75,8 @@ public final class DeltaSinkConfig extends AbstractConfig {
 
   // Each entry maps one topic to a full UC name: "<topic>:<catalog>.<schema>.<table>". Kafka topic
   // names contain no ':' and UC identifier parts no '.', so the shapes don't collide. Whitespace is
-  // allowed only around the ':' (trimmed at parse); none inside an identifier part, so the validator
+  // allowed only around the ':' (trimmed at parse); none inside an identifier part, so the
+  // validator
   // and the runtime parser agree on what is accepted.
   private static final Pattern MAP_ENTRY =
       Pattern.compile("[^:\\s]+\\s*:\\s*[^.:\\s]+\\.[^.:\\s]+\\.[^.:\\s]+");
@@ -120,7 +123,11 @@ public final class DeltaSinkConfig extends AbstractConfig {
               "",
               ConfigDef.Importance.HIGH,
               "Bearer token for the Unity Catalog REST API (a PAT or long-lived service-principal "
-                  + "token); used when " + AUTH_TYPE + "=" + AUTH_PAT + ". Principal must hold "
+                  + "token); used when "
+                  + AUTH_TYPE
+                  + "="
+                  + AUTH_PAT
+                  + ". Principal must hold "
                   + "EXTERNAL USE SCHEMA on the target schema.")
           .define(
               AUTH_TYPE,
@@ -128,23 +135,37 @@ public final class DeltaSinkConfig extends AbstractConfig {
               AUTH_PAT,
               ConfigDef.ValidString.in(AUTH_PAT, AUTH_OAUTH_M2M, AUTH_AZURE_ENTRA),
               ConfigDef.Importance.HIGH,
-              "How to obtain the bearer token. '" + AUTH_PAT + "': use " + TOKEN + " as-is. '"
-                  + AUTH_OAUTH_M2M + "': Databricks service-principal OAuth (client-credentials at "
+              "How to obtain the bearer token. '"
+                  + AUTH_PAT
+                  + "': use "
+                  + TOKEN
+                  + " as-is. '"
+                  + AUTH_OAUTH_M2M
+                  + "': Databricks service-principal OAuth (client-credentials at "
                   + "{workspace}/oidc/v1/token); the connector mints and refreshes tokens. '"
-                  + AUTH_AZURE_ENTRA + "': Microsoft Entra service-principal OAuth for the Azure "
+                  + AUTH_AZURE_ENTRA
+                  + "': Microsoft Entra service-principal OAuth for the Azure "
                   + "Databricks resource. The oauth/entra modes refresh on their own before expiry.")
           .define(
               CLIENT_ID,
               ConfigDef.Type.STRING,
               "",
               ConfigDef.Importance.MEDIUM,
-              "Service-principal client/application id for " + AUTH_OAUTH_M2M + " / " + AUTH_AZURE_ENTRA + ".")
+              "Service-principal client/application id for "
+                  + AUTH_OAUTH_M2M
+                  + " / "
+                  + AUTH_AZURE_ENTRA
+                  + ".")
           .define(
               CLIENT_SECRET,
               ConfigDef.Type.PASSWORD,
               "",
               ConfigDef.Importance.MEDIUM,
-              "Service-principal client secret for " + AUTH_OAUTH_M2M + " / " + AUTH_AZURE_ENTRA + ".")
+              "Service-principal client secret for "
+                  + AUTH_OAUTH_M2M
+                  + " / "
+                  + AUTH_AZURE_ENTRA
+                  + ".")
           .define(
               AZURE_TENANT_ID,
               ConfigDef.Type.STRING,
@@ -221,8 +242,11 @@ public final class DeltaSinkConfig extends AbstractConfig {
               ConfigDef.Type.STRING,
               "",
               ConfigDef.Importance.MEDIUM,
-              "SQL warehouse id used to run CREATE TABLE for " + AUTO_CREATE_TABLES + " (Databricks "
-                  + "writes the table's v0) and ALTER TABLE ADD COLUMNS for " + SCHEMA_EVOLUTION
+              "SQL warehouse id used to run CREATE TABLE for "
+                  + AUTO_CREATE_TABLES
+                  + " (Databricks "
+                  + "writes the table's v0) and ALTER TABLE ADD COLUMNS for "
+                  + SCHEMA_EVOLUTION
                   + ". Required when auto-creating an absent table or evolving its schema.")
           .define(
               SCHEMA_EVOLUTION,
@@ -232,7 +256,9 @@ public final class DeltaSinkConfig extends AbstractConfig {
               ConfigDef.Importance.MEDIUM,
               "Absorb additive schema changes on a catalog-managed table instead of DLQ-ing the "
                   + "schema-mismatched rows. 'none' (default) keeps the fail-closed poison/DLQ behavior; "
-                  + "'add' runs ALTER TABLE ADD COLUMNS (via " + WAREHOUSE_ID + ") for new nullable "
+                  + "'add' runs ALTER TABLE ADD COLUMNS (via "
+                  + WAREHOUSE_ID
+                  + ") for new nullable "
                   + "top-level columns, then appends. Drops/renames/narrowing/type-changes stay poison.");
 
   public DeltaSinkConfig(Map<String, String> props) {
@@ -242,14 +268,23 @@ public final class DeltaSinkConfig extends AbstractConfig {
     if (flushSize() <= 0 && flushBytes() <= 0 && flushIntervalMs() <= 0) {
       throw new ConfigException(
           "At least one flush dial must be enabled (> 0): "
-              + FLUSH_SIZE + ", " + FLUSH_BYTES + ", or " + FLUSH_INTERVAL_MS
+              + FLUSH_SIZE
+              + ", "
+              + FLUSH_BYTES
+              + ", or "
+              + FLUSH_INTERVAL_MS
               + "; all disabled would buffer unbounded.");
     }
-    // schema.evolution runs ALTER TABLE on a SQL warehouse, so it needs one configured. Cross-field;
+    // schema.evolution runs ALTER TABLE on a SQL warehouse, so it needs one configured.
+    // Cross-field;
     // fail at config time rather than on the first additive batch.
     if (!EVOLVE_NONE.equals(schemaEvolution()) && warehouseId().isEmpty()) {
       throw new ConfigException(
-          SCHEMA_EVOLUTION + "=" + schemaEvolution() + " requires " + WAREHOUSE_ID
+          SCHEMA_EVOLUTION
+              + "="
+              + schemaEvolution()
+              + " requires "
+              + WAREHOUSE_ID
               + " (ALTER TABLE ADD COLUMNS runs on a SQL warehouse).");
     }
     // Each auth type needs a different set of fields; cross-field, so validate here rather than in

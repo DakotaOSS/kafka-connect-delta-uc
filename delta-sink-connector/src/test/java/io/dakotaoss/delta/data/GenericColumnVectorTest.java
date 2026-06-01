@@ -40,10 +40,12 @@ class GenericColumnVectorTest {
   @Test
   void booleanStringDecimalBinaryGetters() {
     assertTrue(new GenericColumnVector(BooleanType.BOOLEAN, new Object[] {true}).getBoolean(0));
-    assertEquals("hi", new GenericColumnVector(StringType.STRING, new Object[] {"hi"}).getString(0));
+    assertEquals(
+        "hi", new GenericColumnVector(StringType.STRING, new Object[] {"hi"}).getString(0));
     assertEquals(
         new BigDecimal("1.50"),
-        new GenericColumnVector(new DecimalType(10, 2), new Object[] {new BigDecimal("1.50")}).getDecimal(0));
+        new GenericColumnVector(new DecimalType(10, 2), new Object[] {new BigDecimal("1.50")})
+            .getDecimal(0));
     byte[] bytes = {1, 2, 3};
     assertArrayEquals(
         bytes, new GenericColumnVector(BinaryType.BINARY, new Object[] {bytes}).getBinary(0));

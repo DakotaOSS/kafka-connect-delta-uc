@@ -10,7 +10,6 @@ import io.dakotaoss.delta.uc.UnityCatalogClient;
 import io.dakotaoss.delta.uc.UnityCatalogCommitter;
 import io.dakotaoss.delta.writer.DeltaKernelWriter;
 import io.dakotaoss.delta.writer.EngineProvider;
-import org.apache.hadoop.conf.Configuration;
 import io.delta.kernel.data.ColumnVector;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.engine.Engine;
@@ -20,6 +19,7 @@ import io.delta.kernel.types.StringType;
 import io.delta.kernel.types.StructType;
 import java.util.Collections;
 import java.util.Optional;
+import org.apache.hadoop.conf.Configuration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
@@ -28,13 +28,15 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
  * so the offline build never runs it. Run by an agent or CI with Databricks access.
  *
  * <p>Required env:
+ *
  * <ul>
- *   <li>{@code DATABRICKS_HOST} e.g. https://adb-123.4.azuredatabricks.net</li>
- *   <li>{@code DATABRICKS_TOKEN} PAT/OAuth with EXTERNAL USE SCHEMA on the schema</li>
- *   <li>{@code UC_TABLE} full name catalog.schema.table (managed, catalogManaged=supported)</li>
+ *   <li>{@code DATABRICKS_HOST} e.g. https://adb-123.4.azuredatabricks.net
+ *   <li>{@code DATABRICKS_TOKEN} PAT/OAuth with EXTERNAL USE SCHEMA on the schema
+ *   <li>{@code UC_TABLE} full name catalog.schema.table (managed, catalogManaged=supported)
  * </ul>
  *
  * <p>Table must exist first (run once in Databricks):
+ *
  * <pre>
  *   CREATE TABLE {catalog}.{schema}.delta_sink_smoke (id INT, name STRING, ts LONG)
  *   TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported');
@@ -81,7 +83,8 @@ class LiveManagedUcWriteTest {
 
     DeltaKernelWriter w = new DeltaKernelWriter();
     io.delta.kernel.Snapshot snapshot =
-        w.loadCatalogSnapshot(engine, target.tablePath(), committer, catalog.commits, catalog.maxVersion);
+        w.loadCatalogSnapshot(
+            engine, target.tablePath(), committer, catalog.commits, catalog.maxVersion);
     io.delta.kernel.TransactionCommitResult result =
         w.appendToSnapshot(engine, snapshot, batch, "live-smoke", now);
     w.maintain(engine, result);

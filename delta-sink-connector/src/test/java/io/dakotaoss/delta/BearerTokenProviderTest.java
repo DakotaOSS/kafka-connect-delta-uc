@@ -10,7 +10,8 @@ class BearerTokenProviderTest {
 
   @Test
   void accessTokenIsReadFromSupplierEachCall() {
-    // the provider holds a Supplier, not a captured String, so a refreshed token is reflected without
+    // the provider holds a Supplier, not a captured String, so a refreshed token is reflected
+    // without
     // reconstructing the provider (the refresh hook the SPEC calls out).
     AtomicReference<String> token = new AtomicReference<>("t1");
     BearerTokenProvider provider = new BearerTokenProvider(token::get);

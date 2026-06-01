@@ -16,7 +16,8 @@ import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.errors.DataException;
 import org.junit.jupiter.api.Test;
 
-// nested-struct mapping + hostile-input guards. existing SchemaMapperTest covers the happy primitive
+// nested-struct mapping + hostile-input guards. existing SchemaMapperTest covers the happy
+// primitive
 // paths; this fills the recursion / rejection / redaction branches the live tests otherwise own.
 class SchemaMapperGuardTest {
 
@@ -76,7 +77,8 @@ class SchemaMapperGuardTest {
         SchemaBuilder.struct()
             .field("attrs", SchemaBuilder.map(Schema.STRING_SCHEMA, Schema.INT32_SCHEMA).build())
             .build();
-    assertTrue(((MapType) SchemaMapper.toKernel(optVals).at(0).getDataType()).isValueContainsNull());
+    assertTrue(
+        ((MapType) SchemaMapper.toKernel(optVals).at(0).getDataType()).isValueContainsNull());
     assertFalse(
         ((MapType) SchemaMapper.toKernel(reqVals).at(0).getDataType()).isValueContainsNull());
   }

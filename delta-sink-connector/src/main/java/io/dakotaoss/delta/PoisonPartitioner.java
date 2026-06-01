@@ -7,11 +7,12 @@ import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 /**
- * Splits a flush buffer into writable rows and poison. The reference schema is the first record with a
- * usable (non-null Struct) value; a row is good only if its value is a Struct on that exact schema --
- * everything else (tombstone/null, non-Struct, mismatched schema) is poison the caller routes to the
- * DLQ. Pulling the head-scan out of {@code flush()} keeps this security-relevant decision unit-testable
- * on its own: pinning the ref to {@code batch.get(0)} would DLQ a whole buffer behind a poison head.
+ * Splits a flush buffer into writable rows and poison. The reference schema is the first record
+ * with a usable (non-null Struct) value; a row is good only if its value is a Struct on that exact
+ * schema -- everything else (tombstone/null, non-Struct, mismatched schema) is poison the caller
+ * routes to the DLQ. Pulling the head-scan out of {@code flush()} keeps this security-relevant
+ * decision unit-testable on its own: pinning the ref to {@code batch.get(0)} would DLQ a whole
+ * buffer behind a poison head.
  */
 final class PoisonPartitioner {
 

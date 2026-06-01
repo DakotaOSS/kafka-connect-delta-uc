@@ -295,6 +295,30 @@
           </execution>
         </executions>
       </plugin>
+      <!-- Formatting gate: google-java-format via spotless. spotless:check is bound to verify so CI
+           fails on unformatted code; run `mvn spotless:apply` to fix. google-java-format reaches into
+           jdk.compiler internals, so JDK 17 needs the add-exports flags in .mvn/jvm.config. -->
+      <plugin>
+        <groupId>com.diffplug.spotless</groupId>
+        <artifactId>spotless-maven-plugin</artifactId>
+        <version>2.43.0</version>
+        <configuration>
+          <java>
+            <googleJavaFormat>
+              <version>1.22.0</version>
+            </googleJavaFormat>
+            <removeUnusedImports/>
+            <importOrder/>
+          </java>
+        </configuration>
+        <executions>
+          <execution>
+            <id>spotless-check</id>
+            <phase>verify</phase>
+            <goals><goal>check</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 </project>

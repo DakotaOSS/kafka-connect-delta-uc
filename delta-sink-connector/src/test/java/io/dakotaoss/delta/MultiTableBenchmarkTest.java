@@ -30,18 +30,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 /**
- * Multi-table throughput + resource benchmark: writes to N catalog-managed tables concurrently from a
- * single JVM, the way one connector serving many topics on the same storage account does. With the
- * per-host {@code VendedSasTokenProvider} this shares one cached FileSystem per host (no JVM-global
- * FS-cache disable), so it directly stresses that path under concurrency.
+ * Multi-table throughput + resource benchmark: writes to N catalog-managed tables concurrently from
+ * a single JVM, the way one connector serving many topics on the same storage account does. With
+ * the per-host {@code VendedSasTokenProvider} this shares one cached FileSystem per host (no
+ * JVM-global FS-cache disable), so it directly stresses that path under concurrency.
  *
- * <p>Reports aggregate + per-table rows/s and commit-latency percentiles alongside the in-JVM resource
- * view (peak heap, avg/peak process CPU, peak threads) from {@link BenchResourceSampler}; the run
- * script also captures the container (cgroup) view via {@code docker stats}.
+ * <p>Reports aggregate + per-table rows/s and commit-latency percentiles alongside the in-JVM
+ * resource view (peak heap, avg/peak process CPU, peak threads) from {@link BenchResourceSampler};
+ * the run script also captures the container (cgroup) view via {@code docker stats}.
  *
  * <p>Env: {@code DATABRICKS_HOST}, {@code DATABRICKS_TOKEN}, {@code BENCH_TABLES} (comma-separated
- * {@code catalog.schema.table}, all the flat CDC schema below), {@code BENCH_ROWS} (rows per table),
- * {@code BENCH_BATCH} (rows per commit, default 100000).
+ * {@code catalog.schema.table}, all the flat CDC schema below), {@code BENCH_ROWS} (rows per
+ * table), {@code BENCH_BATCH} (rows per commit, default 100000).
  */
 class MultiTableBenchmarkTest {
 
@@ -93,7 +93,8 @@ class MultiTableBenchmarkTest {
     ExecutorService maintenance = Executors.newSingleThreadExecutor();
     ExecutorService writers = Executors.newFixedThreadPool(tables.length);
 
-    System.out.printf("[BENCH-MT] tables=%d rows/table=%d batch=%d shape=flat%n",
+    System.out.printf(
+        "[BENCH-MT] tables=%d rows/table=%d batch=%d shape=flat%n",
         tables.length, rowsPerTable, batchRows);
 
     BenchResourceSampler sampler = new BenchResourceSampler(250);
@@ -101,8 +102,20 @@ class MultiTableBenchmarkTest {
     List<Future<Result>> futures = new ArrayList<>();
     for (String t : tables) {
       String table = t.trim();
-      futures.add(writers.submit((Callable<Result>) () ->
-          writeTable(uc, host, token, table, kernelSchema, pool, rowsPerTable, batchRows, maintenance)));
+      futures.add(
+          writers.submit(
+              (Callable<Result>)
+                  () ->
+                      writeTable(
+                          uc,
+                          host,
+                          token,
+                          table,
+                          kernelSchema,
+                          pool,
+                          rowsPerTable,
+                          batchRows,
+                          maintenance)));
     }
 
     long totalRows = 0;
@@ -114,7 +127,8 @@ class MultiTableBenchmarkTest {
       totalCommits += r.commits;
       allCommitNanos.addAll(r.commitNanos);
       double sumS = r.commitNanos.stream().mapToLong(Long::longValue).sum() / 1e9;
-      System.out.printf("[BENCH-MT] %-44s %d rows, %d commits, %.0f rows/s (sync)%n",
+      System.out.printf(
+          "[BENCH-MT] %-44s %d rows, %d commits, %.0f rows/s (sync)%n",
           r.table, r.rows, r.commits, r.rows / Math.max(sumS, 1e-9));
     }
     double wall = (System.nanoTime() - startNanos) / 1e9;
@@ -131,14 +145,30 @@ class MultiTableBenchmarkTest {
         "[BENCH-MT-RESULT] tables=%d total_rows=%d commits=%d wallclock_s=%.2f aggregate_rows_s=%.0f "
             + "per_table_rows_s=%.0f commit_ms_p50=%.0f commit_ms_p99=%.0f peak_heap_mb=%.0f "
             + "avg_cpu_pct=%.0f peak_cpu_pct=%.0f peak_threads=%d%n",
-        tables.length, totalRows, totalCommits, wall, totalRows / wall,
-        (totalRows / wall) / tables.length, p50, p99,
-        sampler.peakHeapMb(), sampler.avgCpuPct(), sampler.peakCpuPct(), sampler.peakThreads());
+        tables.length,
+        totalRows,
+        totalCommits,
+        wall,
+        totalRows / wall,
+        (totalRows / wall) / tables.length,
+        p50,
+        p99,
+        sampler.peakHeapMb(),
+        sampler.avgCpuPct(),
+        sampler.peakCpuPct(),
+        sampler.peakThreads());
   }
 
   private static Result writeTable(
-      UnityCatalogClient uc, String host, String token, String fullName, StructType kernelSchema,
-      SinkRecord[] pool, long rowsPerTable, int batchRows, ExecutorService maintenance)
+      UnityCatalogClient uc,
+      String host,
+      String token,
+      String fullName,
+      StructType kernelSchema,
+      SinkRecord[] pool,
+      long rowsPerTable,
+      int batchRows,
+      ExecutorService maintenance)
       throws Exception {
     UcTableResolver resolver = new UcTableResolver(uc, fullName, Collections.emptyList());
     TableTarget target = resolver.resolve("bench");
@@ -151,7 +181,8 @@ class MultiTableBenchmarkTest {
     DeltaKernelWriter writer = new DeltaKernelWriter();
     UnityCatalogCommitter.CatalogState state = committer.catalogState();
     Snapshot snapshot =
-        writer.loadCatalogSnapshot(engine, target.tablePath(), committer, state.commits, state.maxVersion);
+        writer.loadCatalogSnapshot(
+            engine, target.tablePath(), committer, state.commits, state.maxVersion);
 
     List<Long> commitNanos = new ArrayList<>();
     List<Future<?>> pending = new ArrayList<>();

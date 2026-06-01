@@ -10,6 +10,10 @@ import io.delta.kernel.types.DataType;
 import io.delta.kernel.types.MapType;
 import io.delta.kernel.types.StructField;
 import io.delta.kernel.types.StructType;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Field;
@@ -18,11 +22,6 @@ import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.data.Timestamp;
 import org.apache.kafka.connect.errors.DataException;
 import org.apache.kafka.connect.sink.SinkRecord;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 
 /**
  * Batch of STRUCT-valued {@link SinkRecord}s -> one Kernel {@link FilteredColumnarBatch}.
@@ -46,7 +45,8 @@ public final class RecordConverter {
     int colCount = kernelSchema.length();
     ColumnVector[] columns = new ColumnVector[colCount];
 
-    // Cast each row once, not once per column: the inner loop ran asStruct() colCount times per row.
+    // Cast each row once, not once per column: the inner loop ran asStruct() colCount times per
+    // row.
     Struct[] rows = new Struct[rowCount];
     for (int r = 0; r < rowCount; r++) {
       rows[r] = asStruct(records.get(r).value());
@@ -92,7 +92,8 @@ public final class RecordConverter {
           Struct s = asStruct(values[r]);
           childValues[r] = s == null ? null : s.get(connectChild);
         }
-        children[j] = buildColumn(childField.getDataType(), connectChild.schema(), childValues, depth + 1);
+        children[j] =
+            buildColumn(childField.getDataType(), connectChild.schema(), childValues, depth + 1);
       }
       return new GenericColumnVector(kernelType, children, nulls);
     }
@@ -134,14 +135,12 @@ public final class RecordConverter {
 
     ColumnVector elements =
         buildColumn(
-            arrayType.getElementType(),
-            connectSchema.valueSchema(),
-            flat.toArray(),
-            depth + 1);
+            arrayType.getElementType(), connectSchema.valueSchema(), flat.toArray(), depth + 1);
     return GenericColumnVector.forArray(arrayType, elements, offsets, nulls);
   }
 
-  // Flatten each row's Map into parallel key + value child vectors + per-row offsets/nulls. Iteration
+  // Flatten each row's Map into parallel key + value child vectors + per-row offsets/nulls.
+  // Iteration
   // order pairs keys with values within a row; cross-row order is the flattened concatenation.
   private static ColumnVector buildMap(
       MapType mapType, Schema connectSchema, Object[] values, int depth) {
@@ -226,7 +225,8 @@ public final class RecordConverter {
     if (value instanceof List) {
       return (List<?>) value;
     }
-    throw new DataException("Expected ARRAY value (java.util.List), got " + value.getClass().getName());
+    throw new DataException(
+        "Expected ARRAY value (java.util.List), got " + value.getClass().getName());
   }
 
   // Guard the (Map) cast for MAP columns.
@@ -234,6 +234,7 @@ public final class RecordConverter {
     if (value instanceof Map) {
       return (Map<?, ?>) value;
     }
-    throw new DataException("Expected MAP value (java.util.Map), got " + value.getClass().getName());
+    throw new DataException(
+        "Expected MAP value (java.util.Map), got " + value.getClass().getName());
   }
 }

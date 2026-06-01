@@ -15,14 +15,18 @@ class VendedSasStoreTest {
     store.put("acct.dfs.core.windows.net", "cont", "__unitystorage/tables/A", "sigA".toCharArray());
     // a request for a blob under the table dir gets that table's SAS
     assertEquals(
-        "sigA", store.sasFor("acct.dfs.core.windows.net", "cont", "__unitystorage/tables/A/_delta_log/00.json"));
+        "sigA",
+        store.sasFor(
+            "acct.dfs.core.windows.net", "cont", "__unitystorage/tables/A/_delta_log/00.json"));
     // exact-dir request also matches
-    assertEquals("sigA", store.sasFor("acct.dfs.core.windows.net", "cont", "__unitystorage/tables/A"));
+    assertEquals(
+        "sigA", store.sasFor("acct.dfs.core.windows.net", "cont", "__unitystorage/tables/A"));
   }
 
   @Test
   void isolatesTwoTablesSharingOneAccountAndContainer() {
-    // the #4 scenario: two tables on the same storage host (one cached FileSystem) must each get their
+    // the #4 scenario: two tables on the same storage host (one cached FileSystem) must each get
+    // their
     // own directory-scoped SAS, by longest-prefix match on the path.
     VendedSasStore store = new VendedSasStore();
     store.put("h", "cont", "ns/tables/A", "sigA".toCharArray());
@@ -43,7 +47,8 @@ class VendedSasStoreTest {
     // ABFS calls getSASToken with the short account ("acct"); the table URI registers the full host
     // ("acct.dfs.core.windows.net"). They must resolve to the same key.
     VendedSasStore store = new VendedSasStore();
-    store.put("rddakotadbstorageunity.dfs.core.windows.net", "cont", "ns/tables/A", "sig".toCharArray());
+    store.put(
+        "rddakotadbstorageunity.dfs.core.windows.net", "cont", "ns/tables/A", "sig".toCharArray());
     assertEquals(
         "sig", store.sasFor("rddakotadbstorageunity", "cont", "ns/tables/A/_delta_log/0.json"));
   }
@@ -58,7 +63,8 @@ class VendedSasStoreTest {
 
   @Test
   void doesNotPrefixMatchASiblingDirectoryWithASharedNamePrefix() {
-    // "ns/tables/A" must not match a request for "ns/tables/AB/..." (string prefix but not a path prefix)
+    // "ns/tables/A" must not match a request for "ns/tables/AB/..." (string prefix but not a path
+    // prefix)
     VendedSasStore store = new VendedSasStore();
     store.put("h", "cont", "ns/tables/A", "sigA".toCharArray());
     assertNull(store.sasFor("h", "cont", "ns/tables/AB/part.parquet"));
@@ -76,7 +82,8 @@ class VendedSasStoreTest {
 
   @Test
   void distinctHostsSharingAShortAccountNameDoNotCollide() {
-    // same account reached via dfs and blob endpoints: full-host keying must keep them separate so a
+    // same account reached via dfs and blob endpoints: full-host keying must keep them separate so
+    // a
     // dfs request can't be served the blob-scoped SAS (endpoint-mismatched -> 403).
     VendedSasStore store = new VendedSasStore();
     store.put("acct.dfs.core.windows.net", "cont", "dir", "sigDfs".toCharArray());
@@ -87,7 +94,8 @@ class VendedSasStoreTest {
 
   @Test
   void shortAccountFallbackIsAmbiguousWhenTwoHostsShareTheName() {
-    // ABFS may call getSASToken with the bare account; if two registered hosts share that short name
+    // ABFS may call getSASToken with the bare account; if two registered hosts share that short
+    // name
     // the fallback can't pick one safely, so it declines rather than risk an endpoint mismatch.
     VendedSasStore store = new VendedSasStore();
     store.put("acct.dfs.core.windows.net", "cont", "dir", "sigDfs".toCharArray());

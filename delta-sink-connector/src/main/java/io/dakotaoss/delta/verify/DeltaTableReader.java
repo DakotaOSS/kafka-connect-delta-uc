@@ -22,7 +22,6 @@ import io.delta.kernel.types.StructType;
 import io.delta.kernel.types.TimestampType;
 import io.delta.kernel.utils.CloseableIterator;
 import io.delta.kernel.utils.FileStatus;
-
 import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -82,9 +81,10 @@ public final class DeltaTableReader {
 
   /**
    * Read the first data batch as a live {@link ColumnarBatch} for inspecting nested/collection
-   * columns that {@link #readRows} can't flatten into {@code Object[]}. Tests writing a single batch
-   * use this to assert array/map encoding round-trips. The iterator is left open intentionally:
-   * Kernel's in-memory vectors stay valid for the returned batch, and this is a local-FS test helper.
+   * columns that {@link #readRows} can't flatten into {@code Object[]}. Tests writing a single
+   * batch use this to assert array/map encoding round-trips. The iterator is left open
+   * intentionally: Kernel's in-memory vectors stay valid for the returned batch, and this is a
+   * local-FS test helper.
    */
   public static ColumnarBatch readBatch(Engine engine, String localTablePath, StructType readSchema)
       throws IOException {

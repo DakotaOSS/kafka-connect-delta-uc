@@ -29,8 +29,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 /**
  * Live proof that a single connector config routes several topics to distinct managed tables in one
  * run, using both {@code ${topic[N]}} segment tokens and explicit {@code topic.to.table} overrides.
- * Skipped unless {@code DATABRICKS_HOST} is set. Reuses the smoke/Debezium tables
- * ({@code UC_TABLE} / {@code DEBEZIUM_FLAT_TABLE} / {@code DEBEZIUM_ENVELOPE_TABLE}).
+ * Skipped unless {@code DATABRICKS_HOST} is set. Reuses the smoke/Debezium tables ({@code UC_TABLE}
+ * / {@code DEBEZIUM_FLAT_TABLE} / {@code DEBEZIUM_ENVELOPE_TABLE}).
  */
 class LiveMultiTableRoutingTest {
 
@@ -40,7 +40,8 @@ class LiveMultiTableRoutingTest {
     String host = System.getenv("DATABRICKS_HOST");
     String token = System.getenv("DATABRICKS_TOKEN");
     String smoke = System.getenv().getOrDefault("UC_TABLE", "main.ingestion.delta_sink_smoke");
-    String flat = System.getenv().getOrDefault("DEBEZIUM_FLAT_TABLE", "main.default.customers_flat");
+    String flat =
+        System.getenv().getOrDefault("DEBEZIUM_FLAT_TABLE", "main.default.customers_flat");
     String envelope =
         System.getenv().getOrDefault("DEBEZIUM_ENVELOPE_TABLE", "main.default.customers_envelope");
 
@@ -98,7 +99,11 @@ class LiveMultiTableRoutingTest {
     List<SinkRecord> recs = new ArrayList<>();
     recs.add(
         new SinkRecord(
-            "t", 0, null, null, s,
+            "t",
+            0,
+            null,
+            null,
+            s,
             new Struct(s).put("id", 1).put("name", "route-a").put("ts", System.currentTimeMillis()),
             0));
     return RecordConverter.toBatch(SchemaMapper.toKernel(s), s, recs);
@@ -117,7 +122,11 @@ class LiveMultiTableRoutingTest {
     List<SinkRecord> recs = new ArrayList<>();
     recs.add(
         new SinkRecord(
-            "t", 0, null, null, s,
+            "t",
+            0,
+            null,
+            null,
+            s,
             new Struct(s)
                 .put("id", 201)
                 .put("name", "Routed Co")

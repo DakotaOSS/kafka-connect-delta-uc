@@ -26,13 +26,16 @@ class RedactTest {
 
   @Test
   void masksStorageAccountAndContainerLayout() {
-    // the abfss:// path discloses the storage account / container layout even with the SAS stripped.
+    // the abfss:// path discloses the storage account / container layout even with the SAS
+    // stripped.
     // Both the no-query path form and the query form must hide account + container.
-    String pathOnly = "wrote file abfss://cont@acct.dfs.core.windows.net/__unitystorage/x/y.parquet";
+    String pathOnly =
+        "wrote file abfss://cont@acct.dfs.core.windows.net/__unitystorage/x/y.parquet";
     String withQuery = "GET abfss://cont@acct.dfs.core.windows.net/t/_delta_log/00.json?sig=ZZ";
     for (String in : new String[] {pathOnly, withQuery}) {
       String out = Redact.text(in);
-      assertFalse(out.contains("acct.dfs.core.windows.net"), "storage account host must be masked: " + out);
+      assertFalse(
+          out.contains("acct.dfs.core.windows.net"), "storage account host must be masked: " + out);
       assertFalse(out.contains("cont@"), "container must be masked: " + out);
       assertFalse(out.contains("__unitystorage"), "storage path layout must be masked: " + out);
     }
@@ -52,7 +55,8 @@ class RedactTest {
 
   @Test
   void messageRedactsThrowableToString() {
-    Exception e = new RuntimeException("403 on abfss://cont@acct.dfs.core.windows.net/t?sig=SECRET");
+    Exception e =
+        new RuntimeException("403 on abfss://cont@acct.dfs.core.windows.net/t?sig=SECRET");
     String out = Redact.message(e);
     assertFalse(out.contains("sig=SECRET"));
     assertFalse(out.contains("acct.dfs.core.windows.net"));
@@ -61,16 +65,22 @@ class RedactTest {
 
   @Test
   void messageRecursesCauseChainAndRedacts() {
-    // a SAS buried in a nested cause must not survive: message() recurses the whole chain, redacting
-    // each level (the top-level toString() alone would omit the cause, but a raw rethrow could leak it).
+    // a SAS buried in a nested cause must not survive: message() recurses the whole chain,
+    // redacting
+    // each level (the top-level toString() alone would omit the cause, but a raw rethrow could leak
+    // it).
     Throwable leaf =
-        new IllegalStateException("ABFS GET abfss://cont@acct.dfs.core.windows.net/t?sig=DEEPSECRET");
+        new IllegalStateException(
+            "ABFS GET abfss://cont@acct.dfs.core.windows.net/t?sig=DEEPSECRET");
     Throwable mid = new java.io.IOException("write failed", leaf);
     Throwable top = new RuntimeException("commit failed", mid);
     String out = Redact.message(top);
     assertFalse(out.contains("sig=DEEPSECRET"), "nested SAS must be redacted");
     assertFalse(out.contains("acct.dfs.core.windows.net"), "nested storage host must be redacted");
-    assertTrue(out.contains("RuntimeException") && out.contains("IOException") && out.contains("IllegalStateException"),
+    assertTrue(
+        out.contains("RuntimeException")
+            && out.contains("IOException")
+            && out.contains("IllegalStateException"),
         "all cause levels should appear (redacted) for diagnosis");
   }
 }

@@ -67,21 +67,26 @@ class OAuthMinterTest {
     assertTrue(lastBody.contains("grant_type=client_credentials"));
     assertTrue(lastBody.contains("scope=all-apis"));
     String expected =
-        "Basic " + Base64.getEncoder().encodeToString("sp-id:sp-secret".getBytes(StandardCharsets.UTF_8));
+        "Basic "
+            + Base64.getEncoder()
+                .encodeToString("sp-id:sp-secret".getBytes(StandardCharsets.UTF_8));
     assertEquals(expected, lastAuth, "client id/secret go in HTTP Basic, not the body");
   }
 
   @Test
   void azureEntraClientCredentialsMintAndParse() throws Exception {
     AzureEntraMinter m =
-        new AzureEntraMinter(baseUrl, "tenant-abc", "sp-id", () -> "sp-secret", HttpClient.newHttpClient());
+        new AzureEntraMinter(
+            baseUrl, "tenant-abc", "sp-id", () -> "sp-secret", HttpClient.newHttpClient());
     TokenMinter.Minted got = m.mint();
     assertEquals("minted-XYZ", got.token);
     assertEquals(3600, got.ttlSeconds);
     assertEquals("/tenant-abc/oauth2/v2.0/token", lastPath);
     assertTrue(lastBody.contains("grant_type=client_credentials"));
     assertTrue(lastBody.contains("client_id=sp-id"));
-    assertTrue(lastBody.contains(AzureEntraMinter.DATABRICKS_RESOURCE), "scope targets the Databricks resource");
+    assertTrue(
+        lastBody.contains(AzureEntraMinter.DATABRICKS_RESOURCE),
+        "scope targets the Databricks resource");
   }
 
   @Test
@@ -92,6 +97,7 @@ class OAuthMinterTest {
         new DatabricksOAuthMinter(baseUrl, "sp-id", () -> "sp-secret", HttpClient.newHttpClient());
     IOException e = assertThrows(IOException.class, m::mint);
     assertTrue(e.getMessage().contains("401"));
-    assertFalse(e.getMessage().contains("should-not-appear"), "must not echo the token-bearing body");
+    assertFalse(
+        e.getMessage().contains("should-not-appear"), "must not echo the token-bearing body");
   }
 }

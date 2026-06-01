@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.dakotaoss.delta.util.Redact;
-
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -20,28 +19,32 @@ import java.util.function.Supplier;
  * Minimal client for the Unity Catalog REST API used by an external Delta writer:
  *
  * <ul>
- *   <li>{@code GET  /api/2.1/unity-catalog/tables/{full_name}} &mdash; resolve table id + storage
- *       location;</li>
+ *   <li>{@code GET /api/2.1/unity-catalog/tables/{full_name}} &mdash; resolve table id + storage
+ *       location;
  *   <li>{@code POST /api/2.1/unity-catalog/temporary-table-credentials} &mdash; vend short-lived
- *       READ_WRITE credentials (the token + storage URL the engine uses to write).</li>
+ *       READ_WRITE credentials (the token + storage URL the engine uses to write).
  * </ul>
  *
  * <p>Requires the calling principal to hold {@code EXTERNAL USE SCHEMA} on the schema and the
- * metastore to have external data access enabled. The base URL is injectable so tests can point at a
- * local stub server.
+ * metastore to have external data access enabled. The base URL is injectable so tests can point at
+ * a local stub server.
  */
 public final class UnityCatalogClient {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
   private final String baseUrl; // e.g. https://adb-123.4.azuredatabricks.net
-  // sourced on each request, not held as a long-lived String, so refresh is picked up and we keep no
+  // sourced on each request, not held as a long-lived String, so refresh is picked up and we keep
+  // no
   // extra durable copy of the secret (the materialized String lives only for the request).
   private final Supplier<String> bearerToken;
   private final HttpClient http;
 
   public UnityCatalogClient(String baseUrl, Supplier<String> bearerToken) {
-    this(baseUrl, bearerToken, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build());
+    this(
+        baseUrl,
+        bearerToken,
+        HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build());
   }
 
   public UnityCatalogClient(String baseUrl, Supplier<String> bearerToken, HttpClient http) {
@@ -50,7 +53,9 @@ public final class UnityCatalogClient {
     this.http = http;
   }
 
-  /** Convenience for tests / fixed tokens; production passes a {@link Supplier} reading the config. */
+  /**
+   * Convenience for tests / fixed tokens; production passes a {@link Supplier} reading the config.
+   */
   public UnityCatalogClient(String baseUrl, String bearerToken) {
     this(baseUrl, () -> bearerToken);
   }
@@ -61,13 +66,10 @@ public final class UnityCatalogClient {
         baseUrl
             + "/api/2.1/unity-catalog/tables/"
             + URLEncoder.encode(fullName, StandardCharsets.UTF_8);
-    HttpRequest req =
-        baseRequest(url).header("Accept", "application/json").GET().build();
+    HttpRequest req = baseRequest(url).header("Accept", "application/json").GET().build();
     JsonNode body = send(req);
     return new TableInfo(
-        body.path("table_id").asText(null),
-        body.path("storage_location").asText(null),
-        body);
+        body.path("table_id").asText(null), body.path("storage_location").asText(null), body);
   }
 
   /** Vend temporary table credentials. {@code operation} is "READ" or "READ_WRITE". */
@@ -75,11 +77,7 @@ public final class UnityCatalogClient {
       throws IOException, InterruptedException {
     String url = baseUrl + "/api/2.1/unity-catalog/temporary-table-credentials";
     String payload =
-        MAPPER
-            .createObjectNode()
-            .put("table_id", tableId)
-            .put("operation", operation)
-            .toString();
+        MAPPER.createObjectNode().put("table_id", tableId).put("operation", operation).toString();
     HttpRequest req =
         baseRequest(url)
             .header("Content-Type", "application/json")
@@ -129,10 +127,13 @@ public final class UnityCatalogClient {
   private JsonNode send(HttpRequest req) throws IOException, InterruptedException {
     HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
     if (resp.statusCode() / 100 != 2) {
-      // Never include the response body: the temporary-table-credentials endpoint returns the vended
+      // Never include the response body: the temporary-table-credentials endpoint returns the
+      // vended
       // SAS in it. Status + redacted URI is enough to diagnose without leaking secrets.
-      String msg = "Unity Catalog API " + resp.statusCode() + " for " + Redact.text(req.uri().toString());
-      // 404 on a tables GET is a normal "absent" signal the auto-create path acts on; make it distinct.
+      String msg =
+          "Unity Catalog API " + resp.statusCode() + " for " + Redact.text(req.uri().toString());
+      // 404 on a tables GET is a normal "absent" signal the auto-create path acts on; make it
+      // distinct.
       throw resp.statusCode() == 404 ? new NotFoundException(msg) : new IOException(msg);
     }
     return MAPPER.readTree(resp.body());

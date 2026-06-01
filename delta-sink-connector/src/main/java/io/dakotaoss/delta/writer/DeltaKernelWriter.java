@@ -1,6 +1,7 @@
 package io.dakotaoss.delta.writer;
 
 import io.dakotaoss.delta.data.Iters;
+import io.dakotaoss.delta.uc.UnityCatalogCommitter;
 import io.dakotaoss.delta.util.Redact;
 import io.delta.kernel.DataWriteContext;
 import io.delta.kernel.Operation;
@@ -13,43 +14,43 @@ import io.delta.kernel.TransactionCommitResult;
 import io.delta.kernel.commit.Committer;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.data.Row;
-import io.dakotaoss.delta.uc.UnityCatalogCommitter;
 import io.delta.kernel.engine.Engine;
-import io.delta.kernel.internal.files.ParsedLogData;
-import io.delta.kernel.transaction.UpdateTableTransactionBuilder;
 import io.delta.kernel.exceptions.ConcurrentTransactionException;
 import io.delta.kernel.exceptions.TableNotFoundException;
 import io.delta.kernel.expressions.Literal;
+import io.delta.kernel.internal.files.ParsedLogData;
+import io.delta.kernel.transaction.UpdateTableTransactionBuilder;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterable;
 import io.delta.kernel.utils.CloseableIterator;
 import io.delta.kernel.utils.DataFileStatus;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Delta Kernel write protocol behind a single {@code append} call.
  *
- * <p>Flow: open table (create with schema if absent); start a transaction, optionally stamped with a
- * {@code SetTransaction} idempotency id; transform logical to physical, write Parquet, generate
+ * <p>Flow: open table (create with schema if absent); start a transaction, optionally stamped with
+ * a {@code SetTransaction} idempotency id; transform logical to physical, write Parquet, generate
  * AddFile actions; commit.
  *
- * <p>Idempotency: with an {@code appId} the transaction carries {@code SetTransaction(appId, version)}.
- * On replay (same {@code appId}, {@code version} not newer than last committed) Kernel throws
- * {@link ConcurrentTransactionException}; treat as already-applied and return the existing version.
- * Lets a Connect task re-deliver a batch after a crash without duplicating data.
+ * <p>Idempotency: with an {@code appId} the transaction carries {@code SetTransaction(appId,
+ * version)}. On replay (same {@code appId}, {@code version} not newer than last committed) Kernel
+ * throws {@link ConcurrentTransactionException}; treat as already-applied and return the existing
+ * version. Lets a Connect task re-deliver a batch after a crash without duplicating data.
  *
  * <p>Catalog-managed (Unity Catalog) tables route the commit through the catalog commit coordinator
  * from the {@link Engine}; coordination happens inside {@code commit(...)}. See {@code
- * EngineProvider} (with UcTableResolver / VendedSasTokenProvider) for where UC commit/credentials are wired in.
+ * EngineProvider} (with UcTableResolver / VendedSasTokenProvider) for where UC commit/credentials
+ * are wired in.
  */
-// Non-final: it is a constructor-injected collaborator of DeltaSinkTask, so tests can substitute a fake.
+// Non-final: it is a constructor-injected collaborator of DeltaSinkTask, so tests can substitute a
+// fake.
 public class DeltaKernelWriter {
 
   private static final Logger LOG = LoggerFactory.getLogger(DeltaKernelWriter.class);
@@ -70,10 +71,11 @@ public class DeltaKernelWriter {
    * Append one batch to the table at {@code tablePath}, creating it from {@code schema} if absent.
    * {@code partitionColumns} may be empty. Non-null {@code appId} makes the write idempotent on
    * {@code (appId, version)}. {@code tableName} is a non-secret label (the UC {@code
-   * catalog.schema.table}) used only in logs/errors so the physical {@code abfss://} path stays out.
+   * catalog.schema.table}) used only in logs/errors so the physical {@code abfss://} path stays
+   * out.
    *
-   * <p>Single unpartitioned commit only. Partitioned tables need the batch grouped by partition value
-   * with {@link Transaction#getWriteContext} called per partition. Not implemented.
+   * <p>Single unpartitioned commit only. Partitioned tables need the batch grouped by partition
+   * value with {@link Transaction#getWriteContext} called per partition. Not implemented.
    */
   public Result append(
       Engine engine,
@@ -124,7 +126,8 @@ public class DeltaKernelWriter {
 
     DataWriteContext writeContext = Transaction.getWriteContext(engine, txnState, partitionValues);
 
-    // Drain+close the writtenFiles iterator (writeParquet does both); a raw iterator would leak if a
+    // Drain+close the writtenFiles iterator (writeParquet does both); a raw iterator would leak if
+    // a
     // later ConcurrentTransactionException short-circuited the commit before it was consumed.
     List<DataFileStatus> writtenFiles = writeParquet(engine, writeContext, physicalData, tableName);
 
@@ -192,7 +195,8 @@ public class DeltaKernelWriter {
         Transaction.transformLogicalData(
             engine, txnState, Iters.singleton(logicalBatch), partitionValues);
     DataWriteContext writeContext = Transaction.getWriteContext(engine, txnState, partitionValues);
-    List<DataFileStatus> writtenFiles = writeParquet(engine, writeContext, physicalData, "snapshot append");
+    List<DataFileStatus> writtenFiles =
+        writeParquet(engine, writeContext, physicalData, "snapshot append");
     recordMetrics(txn.getCommitter(), logicalBatch, writtenFiles);
     CloseableIterator<Row> appendActions =
         Transaction.generateAppendActions(
@@ -207,8 +211,8 @@ public class DeltaKernelWriter {
 
   /**
    * Backfill the committed version to the published log and run post-commit hooks (checkpoint,
-   * checksum). Safe to run async: UC already holds the ratified commit durably, so this only compacts
-   * the published log and never affects commit durability.
+   * checksum). Safe to run async: UC already holds the ratified commit durably, so this only
+   * compacts the published log and never affects commit durability.
    */
   public void maintain(Engine engine, TransactionCommitResult result) {
     if (result.getPostCommitSnapshot().isPresent()) {
@@ -222,9 +226,11 @@ public class DeltaKernelWriter {
       try {
         hook.threadSafeInvoke(engine);
       } catch (io.delta.kernel.exceptions.CheckpointAlreadyExistsException e) {
-        // A checkpoint for this version is already present (e.g. left by an external/Databricks-side
+        // A checkpoint for this version is already present (e.g. left by an
+        // external/Databricks-side
         // write or an earlier run). The checkpoint is a published-log optimization, never commit
-        // durability -- UC holds the ratified commit -- so an existing one is a no-op, not a failure.
+        // durability -- UC holds the ratified commit -- so an existing one is a no-op, not a
+        // failure.
         LOG.debug("Checkpoint already present for hook {}; skipping (idempotent).", hook.getType());
       } catch (IOException e) {
         // Redact: ABFS IOExceptions embed the request URL incl. the SAS query string.
@@ -233,7 +239,9 @@ public class DeltaKernelWriter {
     }
   }
 
-  /** Write the batch's Parquet files, materialized to a list so file count/size metrics can be read. */
+  /**
+   * Write the batch's Parquet files, materialized to a list so file count/size metrics can be read.
+   */
   private static List<DataFileStatus> writeParquet(
       Engine engine,
       DataWriteContext writeContext,
@@ -263,7 +271,10 @@ public class DeltaKernelWriter {
     return files;
   }
 
-  /** Hand per-commit write metrics to the UC committer so the commit's operationMetrics is populated. */
+  /**
+   * Hand per-commit write metrics to the UC committer so the commit's operationMetrics is
+   * populated.
+   */
   private static void recordMetrics(
       Committer committer, FilteredColumnarBatch batch, List<DataFileStatus> files) {
     if (committer instanceof UnityCatalogCommitter) {

@@ -52,7 +52,9 @@ class DeltaKernelWriterTest {
     String path = tmp.resolve("orders").toString();
     Engine engine =
         EngineProvider.hadoop()
-            .engineFor(new TableTarget("t.t.orders", path, Collections.emptyList(), Collections.emptyMap()));
+            .engineFor(
+                new TableTarget(
+                    "t.t.orders", path, Collections.emptyList(), Collections.emptyMap()));
     DeltaKernelWriter writer = new DeltaKernelWriter();
 
     // first write also creates the table
@@ -65,7 +67,10 @@ class DeltaKernelWriterTest {
             Collections.emptyList(),
             "app:orders-0",
             10L,
-            batch(new Integer[] {1, 2, 3}, new String[] {"a", "b", "c"}, new Double[] {1.5, 2.5, 3.5}));
+            batch(
+                new Integer[] {1, 2, 3},
+                new String[] {"a", "b", "c"},
+                new Double[] {1.5, 2.5, 3.5}));
     assertTrue(r1.applied, "first batch should be applied");
     assertEquals(0L, r1.version, "first commit is table version 0");
 
@@ -95,14 +100,17 @@ class DeltaKernelWriterTest {
     String path = tmp.resolve("events").toString();
     Engine engine =
         EngineProvider.hadoop()
-            .engineFor(new TableTarget("t.t.events", path, Collections.emptyList(), Collections.emptyMap()));
+            .engineFor(
+                new TableTarget(
+                    "t.t.events", path, Collections.emptyList(), Collections.emptyMap()));
     DeltaKernelWriter writer = new DeltaKernelWriter();
 
     FilteredColumnarBatch b =
         batch(new Integer[] {1, 2, 3}, new String[] {"x", "y", "z"}, new Double[] {1.0, 2.0, 3.0});
 
     DeltaKernelWriter.Result first =
-        writer.append(engine, path, "t.t.events", schema, Collections.emptyList(), "app:events-0", 100L, b);
+        writer.append(
+            engine, path, "t.t.events", schema, Collections.emptyList(), "app:events-0", 100L, b);
     assertTrue(first.applied);
     assertEquals(3, DeltaTableReader.countRows(engine, path, schema));
 
@@ -110,7 +118,15 @@ class DeltaKernelWriterTest {
     FilteredColumnarBatch replay =
         batch(new Integer[] {1, 2, 3}, new String[] {"x", "y", "z"}, new Double[] {1.0, 2.0, 3.0});
     DeltaKernelWriter.Result dup =
-        writer.append(engine, path, "t.t.events", schema, Collections.emptyList(), "app:events-0", 100L, replay);
+        writer.append(
+            engine,
+            path,
+            "t.t.events",
+            schema,
+            Collections.emptyList(),
+            "app:events-0",
+            100L,
+            replay);
     assertFalse(dup.applied, "replay of same (appId,version) must be skipped");
     assertEquals(3, DeltaTableReader.countRows(engine, path, schema), "no duplication on replay");
   }

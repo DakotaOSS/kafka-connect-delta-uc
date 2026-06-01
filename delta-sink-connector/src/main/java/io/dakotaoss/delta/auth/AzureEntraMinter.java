@@ -26,14 +26,25 @@ public final class AzureEntraMinter implements TokenMinter {
   private final HttpClient http;
 
   public AzureEntraMinter(String tenantId, String clientId, Supplier<String> clientSecret) {
-    this("https://login.microsoftonline.com", tenantId, clientId, clientSecret,
+    this(
+        "https://login.microsoftonline.com",
+        tenantId,
+        clientId,
+        clientSecret,
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build());
   }
 
   // visible for tests: inject the authority base + HttpClient pointed at a local stub.
   AzureEntraMinter(
-      String authorityBase, String tenantId, String clientId, Supplier<String> clientSecret, HttpClient http) {
-    String base = authorityBase.endsWith("/") ? authorityBase.substring(0, authorityBase.length() - 1) : authorityBase;
+      String authorityBase,
+      String tenantId,
+      String clientId,
+      Supplier<String> clientSecret,
+      HttpClient http) {
+    String base =
+        authorityBase.endsWith("/")
+            ? authorityBase.substring(0, authorityBase.length() - 1)
+            : authorityBase;
     this.tokenUrl = base + "/" + tenantId + "/oauth2/v2.0/token";
     this.clientId = clientId;
     this.clientSecret = clientSecret;
@@ -44,9 +55,12 @@ public final class AzureEntraMinter implements TokenMinter {
   public Minted mint() throws Exception {
     String form =
         "grant_type=client_credentials"
-            + "&client_id=" + enc(clientId)
-            + "&client_secret=" + enc(clientSecret.get())
-            + "&scope=" + enc(DATABRICKS_RESOURCE + "/.default");
+            + "&client_id="
+            + enc(clientId)
+            + "&client_secret="
+            + enc(clientSecret.get())
+            + "&scope="
+            + enc(DATABRICKS_RESOURCE + "/.default");
     HttpRequest req =
         HttpRequest.newBuilder(URI.create(tokenUrl))
             .timeout(Duration.ofSeconds(30))

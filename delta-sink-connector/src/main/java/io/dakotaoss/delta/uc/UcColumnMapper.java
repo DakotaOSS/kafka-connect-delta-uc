@@ -15,7 +15,8 @@ import org.apache.kafka.connect.errors.DataException;
  * Build the SQL column definitions for a {@code CREATE TABLE} from a Connect value schema, so the
  * connector can auto-create a catalog-managed table whose schema matches the records it will write.
  * Type coverage mirrors {@link io.dakotaoss.delta.schema.SchemaMapper}: leaf types + nested STRUCT;
- * ARRAY/MAP are an extension point. All columns are nullable (Kernel enforces nullability on write).
+ * ARRAY/MAP are an extension point. All columns are nullable (Kernel enforces nullability on
+ * write).
  */
 public final class UcColumnMapper {
 
@@ -23,7 +24,9 @@ public final class UcColumnMapper {
 
   private UcColumnMapper() {}
 
-  /** Comma-separated column defs, e.g. {@code `id` INT, `name` STRING, `source` STRUCT<lsn:BIGINT>}. */
+  /**
+   * Comma-separated column defs, e.g. {@code `id` INT, `name` STRING, `source` STRUCT<lsn:BIGINT>}.
+   */
   public static String ddlColumnDefs(Schema valueSchema) {
     if (valueSchema == null || valueSchema.type() != Schema.Type.STRUCT) {
       throw new DataException(
@@ -34,15 +37,20 @@ public final class UcColumnMapper {
     for (Field f : valueSchema.fields()) {
       // mirror the Connect schema's nullability so the created table matches SchemaMapper.toKernel
       // exactly (Kernel rejects a write whose schema differs, including non-null vs nullable).
-      defs.add("`" + f.name() + "` " + sqlType(f.schema(), 0) + (f.schema().isOptional() ? "" : " NOT NULL"));
+      defs.add(
+          "`"
+              + f.name()
+              + "` "
+              + sqlType(f.schema(), 0)
+              + (f.schema().isOptional() ? "" : " NOT NULL"));
     }
     return String.join(", ", defs);
   }
 
   /**
-   * Column defs for just {@code columnNames}, for {@code ALTER TABLE ... ADD COLUMNS (...)}. The named
-   * fields must be nullable (added columns can't be NOT NULL on a table with existing rows), so no
-   * {@code NOT NULL} is emitted; an unknown name is a programming error.
+   * Column defs for just {@code columnNames}, for {@code ALTER TABLE ... ADD COLUMNS (...)}. The
+   * named fields must be nullable (added columns can't be NOT NULL on a table with existing rows),
+   * so no {@code NOT NULL} is emitted; an unknown name is a programming error.
    */
   public static String addColumnsDdl(Schema valueSchema, Collection<String> columnNames) {
     List<String> defs = new ArrayList<>();
@@ -64,7 +72,10 @@ public final class UcColumnMapper {
       List<String> parts = new ArrayList<>();
       for (Field f : schema.fields()) {
         parts.add(
-            f.name() + ":" + sqlType(f.schema(), depth + 1) + (f.schema().isOptional() ? "" : " NOT NULL"));
+            f.name()
+                + ":"
+                + sqlType(f.schema(), depth + 1)
+                + (f.schema().isOptional() ? "" : " NOT NULL"));
       }
       return "STRUCT<" + String.join(",", parts) + ">";
     }
@@ -99,7 +110,8 @@ public final class UcColumnMapper {
         return "BINARY";
       default:
         throw new UnsupportedOperationException(
-            "Cannot auto-create a column of Connect type " + schema.type()
+            "Cannot auto-create a column of Connect type "
+                + schema.type()
                 + "; ARRAY/MAP are an extension point. Pre-create the table or omit the column.");
     }
   }
@@ -112,7 +124,9 @@ public final class UcColumnMapper {
     try {
       scale = Integer.parseInt(schema.parameters().get(Decimal.SCALE_FIELD));
     } catch (NumberFormatException e) {
-      throw new DataException("Decimal scale is not an integer: " + Redact.text(schema.parameters().get(Decimal.SCALE_FIELD)));
+      throw new DataException(
+          "Decimal scale is not an integer: "
+              + Redact.text(schema.parameters().get(Decimal.SCALE_FIELD)));
     }
     if (scale < 0 || scale > 38) {
       throw new DataException("Decimal scale must be 0..38, got " + scale);
