@@ -1,5 +1,7 @@
 package io.dakotaoss.delta;
 
+import io.dakotaoss.delta.auth.CredentialProvider;
+import io.dakotaoss.delta.auth.Credentials;
 import io.dakotaoss.delta.model.TableTarget;
 import io.dakotaoss.delta.schema.RecordConverter;
 import io.dakotaoss.delta.schema.RecordSizeEstimator;
@@ -64,6 +66,9 @@ public final class DeltaSinkTask extends SinkTask {
   private static final long REFRESH_MS = 40 * 60 * 1000;
 
   private DeltaSinkConfig config;
+  // one provider per task, shared across all tables: a single token (refreshed on its own for the
+  // oauth/entra modes) authenticates every UC call this task makes.
+  private CredentialProvider credential;
   private TableResolver resolver;
   private EngineProvider engineProvider;
   private DeltaKernelWriter writer;
@@ -112,6 +117,7 @@ public final class DeltaSinkTask extends SinkTask {
       DeltaKernelWriter writer,
       String connectorName) {
     this.config = config;
+    this.credential = Credentials.fromConfig(config);
     this.resolver = resolver;
     this.engineProvider = engineProvider;
     this.writer = writer;
@@ -139,10 +145,11 @@ public final class DeltaSinkTask extends SinkTask {
     this.flushSize = config.flushSize();
     this.flushBytes = config.flushBytes();
     this.flushIntervalMs = config.flushIntervalMs();
-    // Source the token from the config Password on each request rather than extracting a long-lived
-    // String, so we hold no extra durable copy and a re-minted token is picked up.
-    UnityCatalogClient uc =
-        new UnityCatalogClient(config.workspaceUrl(), () -> config.token().value());
+    // One credential provider for the whole task: for oauth/entra it mints and refreshes tokens on
+    // its own (before expiry); for pat it reads the config token per request. Either way the UC
+    // clients just see a Supplier<String> that always yields a valid token.
+    this.credential = Credentials.fromConfig(config);
+    UnityCatalogClient uc = new UnityCatalogClient(config.workspaceUrl(), credential);
     this.resolver =
         new UcTableResolver(
             uc, config.tableNameFormat(), config.topicToTable(), config.partitionColumns());
@@ -380,7 +387,7 @@ public final class DeltaSinkTask extends SinkTask {
       UnityCatalogCommitter committer =
           new UnityCatalogCommitter(
               config.workspaceUrl(),
-              () -> config.token().value(),
+              credential,
               target.tableId(),
               target.tablePath(),
               conf);

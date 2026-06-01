@@ -70,6 +70,15 @@ offline-coverage gaps is tracked in the linked issues.
   `VendedSasStoreTest`, `BearerTokenProviderTest`,
   `UnityCatalogClientTest.buildsProviderBasedAbfsConfigAndStoresSasOutOfConfig` /
   `readsBearerTokenFromSupplierPerRequest`.
+- **R4a — Durable authentication.** `databricks.auth.type` selects a `CredentialProvider`: `pat`
+  (static token), `oauth-m2m`, or `azure-entra` (service-principal client-credentials, minted by the
+  connector). OAuth modes refresh proactively at ~80% of token lifetime, single-flight, tolerating a
+  transient mint failure while the cached token is still valid — so a token never expires unattended
+  and the expired-token retry storm does not arise. Secrets never appear in logs/exceptions.
+  *Acceptance:* refresh-before-expiry, single-flight, mint-failure tolerance, force-refresh on
+  `invalidate()`; OAuth/Entra mint parse + non-2xx without leaking the response body; config
+  validation per auth type. *Enforced by:* `RefreshingCredentialTest`, `OAuthMinterTest`,
+  `DeltaSinkConfigTest` (auth-type cases + `patFactoryReturnsConfiguredToken`).
 - **R5 — Secret redaction.** No vended SAS or bearer token reaches a log, exception message, or DLQ
   record. *Acceptance:* `Redact` masks whole `abfss://` URLs and SAS/bearer/`sas_token` fragments; a
   flush failure carrying a SAS is redacted before it reaches the DLQ reporter and the thrown exception.
@@ -129,10 +138,26 @@ before its vended SAS (~1 h TTL) can expire: `stateFor` expires a cached entry a
 Writing to a Databricks **managed** UC table from an external engine is gated on two mechanisms, and
 on a workspace Beta toggle.
 
-The bearer token (PAT or AAD) for both the UC REST calls and the commit RPCs is sourced through a
-`Supplier<String>` read on each request (`UnityCatalogClient`, `BearerTokenProvider`,
-`UnityCatalogCommitter`) and materialized only at the HTTP boundary, so a re-minted token is picked up
-without rebuilding the client and no extra durable copy of the secret is held.
+The bearer token for both the UC REST calls and the commit RPCs is sourced through a `Supplier<String>`
+read on each request (`UnityCatalogClient`, `BearerTokenProvider`, `UnityCatalogCommitter`) and
+materialized only at the HTTP boundary, so a re-minted token is picked up without rebuilding the client
+and no extra durable copy of the secret is held.
+
+Behind that seam sits a `CredentialProvider` (package `auth`) chosen by `databricks.auth.type`, so auth
+is **set-and-forget** — once configured it never expires unattended:
+
+- `pat` (default) — a static PAT or long-lived service-principal token in `databricks.token`,
+  read per request (`StaticCredential`). Durability is the token's own lifetime.
+- `oauth-m2m` — a Databricks service principal (`databricks.client.id` / `databricks.client.secret`);
+  the connector mints tokens via the workspace `/oidc/v1/token` (client-credentials, scope `all-apis`).
+- `azure-entra` — a Microsoft Entra service principal (`azure.tenant.id` + client id/secret) for the
+  Azure Databricks resource `2ff814a6-…`; the same identity model as `az account get-access-token`.
+
+The two OAuth modes wrap the minter in a `RefreshingCredential` that refreshes **proactively at ~80% of
+token lifetime** (never below a 60 s cushion), single-flight across concurrent flush threads, and
+tolerates a transient mint failure while the cached token is still valid. Because the token is refreshed
+well before expiry, an expired-token 401 — and the UC-SDK retry storm it would trigger — does not arise
+in steady state. One provider per task authenticates all of that task's tables.
 
 **Catalog commits (`delta.feature.catalogManaged`).** Commit coordination moves from the filesystem to
 Unity Catalog. UC is the source of truth for table state. A writer stages a commit file under
@@ -205,7 +230,11 @@ Config surface is `DeltaSinkConfig`. Defaults shown.
 | key | type | default | purpose |
 |---|---|---|---|
 | `databricks.workspace.url` | string | — | UC REST base URL |
-| `databricks.token` | password | — | bearer token (PAT or AAD); principal needs `EXTERNAL USE SCHEMA`. Read from the config `Password` per request via a `Supplier<String>` (materialized only at the HTTP boundary), so a re-minted token is picked up without rebuilding the client |
+| `databricks.auth.type` | string | `pat` | how to obtain the bearer token: `pat` (use `databricks.token`), `oauth-m2m` (Databricks SP client-credentials, minted+refreshed), `azure-entra` (Entra SP client-credentials for the Azure Databricks resource, minted+refreshed) |
+| `databricks.token` | password | (empty) | bearer token (PAT or long-lived SP token), used when `databricks.auth.type=pat`; principal needs `EXTERNAL USE SCHEMA`. Read per request via a `Supplier<String>` so a rotated value is picked up |
+| `databricks.client.id` | string | (empty) | service-principal client/application id; required for `oauth-m2m` / `azure-entra` |
+| `databricks.client.secret` | password | (empty) | service-principal client secret; required for `oauth-m2m` / `azure-entra` |
+| `azure.tenant.id` | string | (empty) | Microsoft Entra tenant id; required for `azure-entra` |
 | `table.name.format` | string | `main.ingestion.${topic}` | Default template. `${topic}` = whole topic; `${topic[N]}` = its Nth dot-segment (0-indexed). Each substituted value must be a valid identifier (`[A-Za-z0-9_]`, ≤255) or routing is rejected. Must resolve to `catalog.schema.table` |
 | `topic.to.table` | list | (empty) | Per-topic overrides that win over the template: `<topic>:<catalog>.<schema>.<table>,...` |
 | `partition.columns` | list | (empty) | partition cols, used only when this connector creates a table |

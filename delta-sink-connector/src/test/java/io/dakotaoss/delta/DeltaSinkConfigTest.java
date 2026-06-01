@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.dakotaoss.delta.auth.Credentials;
 import java.util.HashMap;
 import java.util.Map;
 import org.apache.kafka.common.config.ConfigException;
@@ -79,5 +80,62 @@ class DeltaSinkConfigTest {
     Map<String, String> p = required();
     p.put(DeltaSinkConfig.TOPIC_TO_TABLE, "orders:a.b.c,orders:d.e.f");
     assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+  }
+
+  @Test
+  void authTypeDefaultsToPat() {
+    assertEquals(DeltaSinkConfig.AUTH_PAT, new DeltaSinkConfig(required()).authType());
+  }
+
+  @Test
+  void patRequiresToken() {
+    Map<String, String> p = new HashMap<>();
+    p.put(DeltaSinkConfig.WORKSPACE_URL, "https://adb-1.azuredatabricks.net"); // no token, default pat
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+  }
+
+  @Test
+  void rejectsUnknownAuthType() {
+    Map<String, String> p = required();
+    p.put(DeltaSinkConfig.AUTH_TYPE, "kerberos");
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+  }
+
+  @Test
+  void oauthM2mRequiresClientIdAndSecret() {
+    Map<String, String> p = new HashMap<>();
+    p.put(DeltaSinkConfig.WORKSPACE_URL, "https://adb-1.azuredatabricks.net");
+    p.put(DeltaSinkConfig.AUTH_TYPE, DeltaSinkConfig.AUTH_OAUTH_M2M);
+    p.put(DeltaSinkConfig.CLIENT_ID, "sp-id"); // secret still missing
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+  }
+
+  @Test
+  void oauthM2mValidWithClientCredentials() {
+    Map<String, String> p = new HashMap<>();
+    p.put(DeltaSinkConfig.WORKSPACE_URL, "https://adb-1.azuredatabricks.net");
+    p.put(DeltaSinkConfig.AUTH_TYPE, DeltaSinkConfig.AUTH_OAUTH_M2M);
+    p.put(DeltaSinkConfig.CLIENT_ID, "sp-id");
+    p.put(DeltaSinkConfig.CLIENT_SECRET, "sp-secret");
+    DeltaSinkConfig c = new DeltaSinkConfig(p); // no token needed
+    assertEquals(DeltaSinkConfig.AUTH_OAUTH_M2M, c.authType());
+    assertEquals("sp-id", c.clientId());
+    assertEquals("sp-secret", c.clientSecret().value());
+  }
+
+  @Test
+  void azureEntraRequiresTenant() {
+    Map<String, String> p = new HashMap<>();
+    p.put(DeltaSinkConfig.WORKSPACE_URL, "https://adb-1.azuredatabricks.net");
+    p.put(DeltaSinkConfig.AUTH_TYPE, DeltaSinkConfig.AUTH_AZURE_ENTRA);
+    p.put(DeltaSinkConfig.CLIENT_ID, "sp-id");
+    p.put(DeltaSinkConfig.CLIENT_SECRET, "sp-secret"); // tenant still missing
+    assertThrows(ConfigException.class, () -> new DeltaSinkConfig(p));
+  }
+
+  @Test
+  void patFactoryReturnsConfiguredToken() {
+    // end-to-end: pat config -> StaticCredential that yields the configured token
+    assertEquals("secret", Credentials.fromConfig(new DeltaSinkConfig(required())).get());
   }
 }
