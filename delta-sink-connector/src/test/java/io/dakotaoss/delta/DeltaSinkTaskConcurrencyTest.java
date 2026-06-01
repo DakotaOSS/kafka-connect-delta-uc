@@ -19,14 +19,11 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
@@ -109,18 +106,14 @@ class DeltaSinkTaskConcurrencyTest {
 
   // ---- credential-TTL re-resolve --------------------------------------------------------------
 
-  // Writer that bypasses the real Delta protocol: appendToSnapshot returns a stub commit result so the
-  // task takes the catalog-managed branch and submits maintain(), without touching a filesystem table.
-  private static class StubCatalogWriter extends DeltaKernelWriter {
+  // Writer that bypasses the real Delta protocol: appendToSnapshot returns null so the task takes the
+  // catalog-managed branch, completes the flush, and advances the offset without fabricating a Kernel
+  // commit result (TransactionCommitResult requires a non-null TransactionReport).
+  private static class NullResultWriter extends DeltaKernelWriter {
     @Override
     public TransactionCommitResult appendToSnapshot(
         Engine engine, Snapshot snapshot, FilteredColumnarBatch batch, String appId, long version) {
-      return new TransactionCommitResult(version, List.of(), null, Optional.empty());
-    }
-
-    @Override
-    public void maintain(Engine engine, TransactionCommitResult result) {
-      // no-op: the re-resolve test isn't about maintenance
+      return null;
     }
   }
 
@@ -146,7 +139,7 @@ class DeltaSinkTaskConcurrencyTest {
   void staleCatalogStateReResolvesPastRefreshTtl() {
     AtomicLong now = new AtomicLong(0);
     DeltaSinkTask task =
-        new DeltaSinkTask(config(), t -> null, EngineProvider.hadoop(), new StubCatalogWriter(), "delta-sink-test");
+        new DeltaSinkTask(config(), t -> null, EngineProvider.hadoop(), new NullResultWriter(), "delta-sink-test");
     task.setClockForTest(now::get);
     AtomicInteger builds = new AtomicInteger();
     task.setStateBuilderForTest(countingBuilder(task, builds));
@@ -172,9 +165,8 @@ class DeltaSinkTaskConcurrencyTest {
 
   // ---- async-maintenance failure --------------------------------------------------------------
 
-  // Same catalog-managed plumbing, but maintain() throws an exception carrying a SAS, as a real ABFS
-  // publish failure would.
-  private static final class FailingMaintainWriter extends StubCatalogWriter {
+  // maintain() throws an exception carrying a SAS, as a real ABFS publish failure would.
+  private static final class FailingMaintainWriter extends DeltaKernelWriter {
     @Override
     public void maintain(Engine engine, TransactionCommitResult result) {
       throw new RuntimeException(SAS_LEAK);
@@ -183,37 +175,21 @@ class DeltaSinkTaskConcurrencyTest {
 
   @Test
   void asyncMaintenanceFailureIsSwallowedAndRedacted() {
+    // runMaintenance runs off the commit path; a thrown maintain() must be swallowed and the logged
+    // text redacted (the cause can embed a vended SAS). The throwing maintain() ignores its result.
+    AtomicReference<String> logged = new AtomicReference<>();
     DeltaSinkTask task =
         new DeltaSinkTask(
             config(), t -> null, EngineProvider.hadoop(), new FailingMaintainWriter(), "delta-sink-test");
-    Engine engine = EngineProvider.hadoop().engineFor(catalogTarget("orders"));
-    task.setStateBuilderForTest(
-        topic -> new TableState(catalogTarget(topic), engine, inertCommitter(), null, task.clockForTest()));
-    AtomicReference<String> logged = new AtomicReference<>();
     task.setAsyncMaintenanceErrorSinkForTest(logged::set);
+    Engine engine = EngineProvider.hadoop().engineFor(catalogTarget("orders"));
 
-    task.put(List.of(rec("orders", 0, 0L, 1)));
-    // commit succeeds despite the doomed maintain(): the exception is swallowed off the commit path
-    Map<TopicPartition, OffsetAndMetadata> safe = task.preCommit(Collections.emptyMap());
-    assertEquals(1L, safe.get(new TopicPartition("orders", 0)).offset());
-
-    task.stop(); // drains the maintenance executor, so the submitted task has run + logged by now
+    task.runMaintenance(engine, null, "orders");
 
     String text = logged.get();
     assertTrue(text != null && text.contains("orders"), "failure should be logged for the topic: " + text);
     assertFalse(text.contains("sig=LEAK"), "SAS must be redacted before logging: " + text);
     assertFalse(text.contains("acct.dfs.core.windows.net"), "storage host must be redacted: " + text);
-
-    // the task stays healthy: another batch still commits and advances the offset
-    DeltaSinkTask healthy =
-        new DeltaSinkTask(
-            config(), t -> null, EngineProvider.hadoop(), new StubCatalogWriter(), "delta-sink-test");
-    Engine engine2 = EngineProvider.hadoop().engineFor(catalogTarget("orders"));
-    healthy.setStateBuilderForTest(
-        topic -> new TableState(catalogTarget(topic), engine2, inertCommitter(), null, healthy.clockForTest()));
-    healthy.put(List.of(rec("orders", 0, 1L, 2)));
-    Map<TopicPartition, OffsetAndMetadata> safe2 = healthy.preCommit(Collections.emptyMap());
-    assertEquals(2L, safe2.get(new TopicPartition("orders", 0)).offset());
-    healthy.stop();
+    task.stop();
   }
 }

@@ -330,17 +330,10 @@ public final class DeltaSinkTask extends SinkTask {
             writer.appendToSnapshot(st.engine, st.snapshot, data, appId, lastOffset);
         if (result != null) {
           st.snapshot = result.getPostCommitSnapshot().orElse(st.snapshot);
-          final TableState fst = st;
-          maintenance.submit(
-              () -> {
-                try {
-                  writer.maintain(fst.engine, result);
-                } catch (Exception e) {
-                  // swallow: UC already holds the ratified commit, so a failed publish/checkpoint is
-                  // non-fatal. Redact first: the cause can embed a vended SAS.
-                  asyncMaintenanceErrorSink.accept(tp.topic() + ": " + Redact.message(e));
-                }
-              });
+          final Engine eng = st.engine;
+          final TransactionCommitResult committed = result;
+          final String topic = tp.topic();
+          maintenance.submit(() -> runMaintenance(eng, committed, topic));
         }
       } else {
         // filesystem table: direct commit
@@ -377,6 +370,19 @@ public final class DeltaSinkTask extends SinkTask {
 
     commitFlushed(tp, lastOffset);
     LOG.info("Flushed {} records for {} -> {}", good.size(), tp, st.target.fullName());
+  }
+
+  /**
+   * Run async backfill/checkpoint off the commit path. UC already holds the ratified commit, so a
+   * failed publish/checkpoint is non-fatal -- swallow it (redacted; the cause can embed a vended SAS)
+   * rather than fail the producer's commit. Package-private so a fault-injection test can drive it.
+   */
+  void runMaintenance(Engine engine, TransactionCommitResult result, String topic) {
+    try {
+      writer.maintain(engine, result);
+    } catch (Exception e) {
+      asyncMaintenanceErrorSink.accept(topic + ": " + Redact.message(e));
+    }
   }
 
   /**
