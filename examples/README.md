@@ -5,15 +5,15 @@ Catalog → downstream MERGE for current state. Two connector configs run on the
 
 ```mermaid
 graph TD
-    SQL["SQL Server (CDC enabled)"]
-    DBZ["debezium-sqlserver-source.json<br/>SqlServerConnector"]
-    KAFKA["Kafka topics<br/>dakota.sales.dbo.customers / .orders"]
-    SINK["delta-uc-sink.json (this connector)<br/>ExtractNewRecordState → after-image + op/lsn/ts_ms"]
-    BRONZE["bronze Delta (UC managed)<br/>bronze.&lt;db&gt;.&lt;table&gt; — append-only change log"]
-    CUR["curated current-state<br/>main.curated.*"]
+    SQL["SQL Server<br/>(CDC enabled)"]
+    DBZ["Debezium<br/>source"]
+    KAFKA["Kafka topics<br/>dakota.sales.dbo.*"]
+    SINK["delta-uc-sink<br/>(this connector)"]
+    BRONZE["bronze Delta (UC)<br/>append-only log"]
+    CUR["curated tables<br/>main.curated.*"]
 
     SQL --> DBZ --> KAFKA --> SINK --> BRONZE
-    BRONZE -->|"MERGE / AUTO CDC, ordered by lsn"| CUR
+    BRONZE -->|"MERGE / AUTO CDC"| CUR
 ```
 
 Bronze is the full change log, never mutated in place. The sink is append-only (the Kernel write API has
