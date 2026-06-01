@@ -97,8 +97,8 @@ The headline is the **CPU column: 2–3% average** (peak 42–86% on brief commi
 UC round-trips, not computing. Heap scales roughly linearly with table count (per-table snapshot
 state and Parquet buffers), so density, not CPU, is the ceiling on tables-per-worker. Two consequences: (1)
 in-region deployment, where round-trips are ~1 ms instead of ~50 ms, should multiply these numbers;
-(2) the serialized flush leaves throughput on the table — concurrent per-partition commits are the
-obvious next optimization.
+(2) the formerly-serialized flush now commits independent tables in parallel — set `flush.concurrency`
+above 1 (default 1) to overlap their WAN round-trips, since the idle CPU has the headroom.
 
 ## JVM vs. Rust (delta-rs): would a rewrite be faster?
 

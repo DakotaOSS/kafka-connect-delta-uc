@@ -41,6 +41,7 @@ public final class DeltaSinkConfig extends AbstractConfig {
   public static final String FLUSH_SIZE = "flush.size";
   public static final String FLUSH_BYTES = "flush.bytes";
   public static final String FLUSH_INTERVAL_MS = "flush.interval.ms";
+  public static final String FLUSH_CONCURRENCY = "flush.concurrency";
 
   // UC REST + credential vending assume TLS; reject http:// and scheme-less values at config time
   // rather than failing later on the first request. Redact the echoed value in case a token rode in.
@@ -198,6 +199,16 @@ public final class DeltaSinkConfig extends AbstractConfig {
               "Max time (ms) to buffer a partition before committing, even below flush.size. "
                   + "Drives micro-batch latency; 5s mirrors Zerobus.")
           .define(
+              FLUSH_CONCURRENCY,
+              ConfigDef.Type.INT,
+              1,
+              ConfigDef.Range.atLeast(1),
+              ConfigDef.Importance.MEDIUM,
+              "How many tables to commit concurrently per flush. 1 (default) commits tables serially "
+                  + "(today's behavior). The connector is WAN/commit-bound (~2-3% CPU), so committing "
+                  + "independent tables in parallel overlaps the round-trips; commits to the SAME table "
+                  + "stay serialized (one in flight) to preserve per-partition order + effectively-once.")
+          .define(
               AUTO_CREATE_TABLES,
               ConfigDef.Type.BOOLEAN,
               true,
@@ -311,6 +322,10 @@ public final class DeltaSinkConfig extends AbstractConfig {
 
   public int flushSize() {
     return getInt(FLUSH_SIZE);
+  }
+
+  public int flushConcurrency() {
+    return getInt(FLUSH_CONCURRENCY);
   }
 
   public long flushBytes() {

@@ -10,8 +10,10 @@ import org.apache.kafka.connect.sink.SinkRecord;
 
 /**
  * Per-partition flush buffer: the rows queued for each topic-partition plus the running byte total and
- * first-arrival timestamp the byte/interval flush dials read. Not thread-safe by design -- every method
- * runs under DeltaSinkTask's single lock, exactly like the maps it replaces.
+ * first-arrival timestamp the byte/interval flush dials read. Methods are {@code synchronized} so the
+ * map structure is safe when {@code flush.concurrency>1} runs per-table commit tasks that clear
+ * different partitions in parallel; the WAN commit happens outside these methods, so locking the buffer
+ * never serializes a commit. A given partition's row list is only handled by its own table's task.
  */
 final class RecordBuffer {
 
@@ -27,7 +29,7 @@ final class RecordBuffer {
   }
 
   /** Total rows across all partitions -- the figure the backpressure ceiling is checked against. */
-  int totalRows() {
+  synchronized int totalRows() {
     int n = 0;
     for (List<SinkRecord> b : rows.values()) {
       n += b.size();
@@ -35,7 +37,7 @@ final class RecordBuffer {
     return n;
   }
 
-  void add(SinkRecord record, long nowMs) {
+  synchronized void add(SinkRecord record, long nowMs) {
     TopicPartition tp = new TopicPartition(record.topic(), record.kafkaPartition());
     rows.computeIfAbsent(tp, k -> new ArrayList<>()).add(record);
     startMs.putIfAbsent(tp, nowMs);
@@ -45,26 +47,26 @@ final class RecordBuffer {
   }
 
   /** The partition's queued rows (an empty list after a clear, null if never seen). */
-  List<SinkRecord> rows(TopicPartition tp) {
+  synchronized List<SinkRecord> rows(TopicPartition tp) {
     return rows.get(tp);
   }
 
-  long byteSize(TopicPartition tp) {
+  synchronized long byteSize(TopicPartition tp) {
     return bytes.getOrDefault(tp, 0L);
   }
 
   /** Wall-clock of the first record buffered for this partition since the last clear. */
-  long startMs(TopicPartition tp) {
+  synchronized long startMs(TopicPartition tp) {
     return startMs.getOrDefault(tp, 0L);
   }
 
   /** Snapshot of partitions with state, safe to iterate while {@link #clear} mutates the buffer. */
-  List<TopicPartition> partitions() {
+  synchronized List<TopicPartition> partitions() {
     return new ArrayList<>(rows.keySet());
   }
 
   /** True if this partition has tripped the size or byte dial (each ignored when {@code <= 0}). */
-  boolean tripped(TopicPartition tp, int flushSize, long flushBytes) {
+  synchronized boolean tripped(TopicPartition tp, int flushSize, long flushBytes) {
     List<SinkRecord> b = rows.get(tp);
     if (b == null) {
       return false;
@@ -75,7 +77,7 @@ final class RecordBuffer {
   }
 
   /** After a partition's buffer commits: empty its rows (keeping the key) and drop its counters. */
-  void clear(TopicPartition tp) {
+  synchronized void clear(TopicPartition tp) {
     List<SinkRecord> b = rows.get(tp);
     if (b != null) {
       b.clear();
@@ -84,7 +86,7 @@ final class RecordBuffer {
     bytes.remove(tp);
   }
 
-  void clearAll() {
+  synchronized void clearAll() {
     rows.clear();
     startMs.clear();
     bytes.clear();
