@@ -21,10 +21,12 @@ The connector sits between four parties, each on its own side of a boundary:
 4. **Connect operator → connector config.** The operator who supplies the connector config (workspace
    URL, token, routing) is trusted; config is part of the deploy, not attacker-controlled input.
 
-```
-producers --records--> Kafka --SinkRecord--> [connector] --bearer token--> Unity Catalog
-   (untrusted data)                                |                        (authz authority)
-                                                   +--vended SAS (per table)--> ADLS Gen2
+```mermaid
+graph LR
+    P["Producers<br/>(untrusted data)"] -->|records| K["Kafka"]
+    K -->|SinkRecord| C["Connector<br/>(SinkTask)"]
+    C -->|bearer token| UC["Unity Catalog<br/>(authz authority)"]
+    C -->|"vended SAS (per table)"| ADLS["ADLS Gen2"]
 ```
 
 ## The bearer token is the only authorization boundary
