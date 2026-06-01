@@ -2,10 +2,15 @@ name: security
 
 on:
   push:
+    branches: [main]
   pull_request:
   schedule:
     # weekly — surface CVEs newly disclosed against unchanged dependencies
     - cron: "17 6 * * 1"
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

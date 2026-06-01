@@ -2,7 +2,13 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+# a new push to a PR branch supersedes the in-flight run for that branch
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -17,3 +23,39 @@ jobs:
       # offline suite only; live + benchmark tests are env-gated and auto-skip.
       - run: mvn -B test
         working-directory: delta-sink-connector
+
+  # packaging is the deliverable: assemble the plugin dir and assert its closure. enforcer catches
+  # convergence, not assembly — a scope/exclusion regression (shaded vs unshaded commons-*, a leaked
+  # provided dep) would otherwise ship undetected.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Assemble plugin dir
+        working-directory: delta-sink-connector
+        run: |
+          mvn -B -DskipTests package
+          mvn -B dependency:copy-dependencies \
+            -DincludeScope=runtime \
+            -DoutputDirectory=target/plugin
+          cp target/kafka-connect-delta-uc-*.jar target/plugin/
+      - name: Assert plugin closure
+        working-directory: delta-sink-connector
+        run: |
+          dir=target/plugin
+          fail() { echo "::error::$1"; exit 1; }
+          present() { ls "$dir"/$1 >/dev/null 2>&1 || fail "expected $1 in plugin dir"; }
+          absent()  { ls "$dir"/$1 >/dev/null 2>&1 && fail "$1 must not be in plugin dir" || true; }
+          present 'kafka-connect-delta-uc-*.jar'
+          # unshaded commons-* are runtime deps, not bundled in hadoop-client-runtime's shaded set
+          present 'commons-lang3-*.jar'
+          present 'commons-io-*.jar'
+          # provided: supplied by the Connect runtime, must not ship
+          absent 'connect-api-*.jar'
+          absent 'slf4j-api-*.jar'
+          echo "plugin closure ok"
