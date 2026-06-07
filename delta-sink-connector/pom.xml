@@ -247,7 +247,7 @@
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
-        <version>0.8.12</version>
+        <version>0.8.15</version>
         <configuration>
           <!-- Live* hits real Databricks and auto-skips offline; Benchmark is a perf harness, not a
                correctness test. Neither runs in CI, so their target classes would always read as
