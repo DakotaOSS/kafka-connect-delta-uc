@@ -16,7 +16,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <delta.kernel.version>4.2.0</delta.kernel.version>
     <kafka.version>3.8.1</kafka.version>
-    <hadoop.version>3.4.2</hadoop.version>
+    <hadoop.version>3.5.0</hadoop.version>
     <jackson.version>2.21.4</jackson.version>
   </properties>
 
