@@ -17,7 +17,7 @@
     <delta.kernel.version>4.2.0</delta.kernel.version>
     <kafka.version>3.8.1</kafka.version>
     <hadoop.version>3.4.2</hadoop.version>
-    <jackson.version>2.21.4</jackson.version>
+    <jackson.version>2.22.0</jackson.version>
   </properties>
 
   <!-- Import the Jackson BOM so every jackson-* (incl. Hadoop's transitives) resolves in lockstep. -->
