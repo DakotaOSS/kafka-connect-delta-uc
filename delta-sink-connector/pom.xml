@@ -83,7 +83,7 @@
     <dependency>
       <groupId>io.unitycatalog</groupId>
       <artifactId>unitycatalog-client</artifactId>
-      <version>0.4.1</version>
+      <version>0.5.0</version>
     </dependency>
 
     <!-- Kafka Connect API. Provided by the Connect runtime at deploy time. -->
