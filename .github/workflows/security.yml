@@ -19,7 +19,7 @@ jobs:
   cve-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # full history so a secret committed earlier is still caught
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # Run the image directly: the gitleaks GitHub Action requires a (free) license key for org
