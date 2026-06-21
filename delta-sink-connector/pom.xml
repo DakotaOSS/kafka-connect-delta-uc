@@ -14,7 +14,7 @@
   <properties>
     <maven.compiler.release>11</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <delta.kernel.version>4.2.0</delta.kernel.version>
+    <delta.kernel.version>4.3.0</delta.kernel.version>
     <kafka.version>3.8.1</kafka.version>
     <hadoop.version>3.4.2</hadoop.version>
     <jackson.version>2.21.4</jackson.version>
